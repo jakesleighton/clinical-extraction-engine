@@ -1,0 +1,265 @@
+# =============================================================================
+# PROSTATE PATHOLOGY PACK — extends base
+# =============================================================================
+# Vocabulary for prostate surgical pathology reports (TCGA-PRAD in Phase 0/1).
+# Everything document-agnostic (three-state status, hedging, evidence, negation,
+# amendments) comes from packs/base/pack.yaml. Any field key not set here
+# (status, evidence, tier, kind) takes the base default.
+# =============================================================================
+
+pack:
+  name: prostate_pathology
+  version: 1
+  extends: base
+
+document:
+  type: surgical_pathology_report
+  unit: report                   # one extraction call covers one report
+  case_grouping: patient_id      # reconciliation groups reports by patient
+
+instructions:
+  domain: |
+    This is a prostate surgical pathology report. It may contain a gross
+    description, a microscopic description, a final diagnosis, a CAP synoptic
+    summary, and addenda.
+
+    Multiple specimen parts: report items for the prostate carcinoma. For a
+    radical prostatectomy, use the dominant (index) tumor. For multiple
+    biopsy parts, use the part with the highest Gleason score, and set
+    conflict to true if parts differ.
+
+    Gleason: primary and secondary are the two patterns in the score as
+    written ("Gleason 3+4=7" gives primary 3, secondary 4, total 7). A
+    tertiary pattern is not the secondary pattern.
+
+fields:
+  # --- Specimen ----------------------------------------------------------------
+  - id: specimen_procedure
+    type: enum
+    allowed: [radical_prostatectomy, needle_biopsy, transurethral_resection, lymph_node_dissection, other]
+    tier: deterministic
+    instructions: >
+      The procedure that produced the main specimen. A prostatectomy with
+      attached lymph node dissection is radical_prostatectomy.
+
+  - id: tumor_laterality
+    type: enum
+    allowed: [left, right, bilateral]
+    instructions: >
+      Side(s) of the prostate involved by carcinoma. bilateral if tumor is
+      present in both lobes.
+
+  - id: report_date
+    type: date
+    tier: deterministic
+    instructions: Date the report was signed out or finalized.
+
+  - id: collection_date
+    type: date
+    tier: deterministic
+    instructions: Date the specimen was collected or the procedure performed.
+
+  # --- Tumor -------------------------------------------------------------------
+  - id: histologic_type
+    type: enum
+    allowed: [acinar_adenocarcinoma, ductal_adenocarcinoma, mixed_acinar_ductal, small_cell_carcinoma, other]
+    instructions: >
+      Histologic type of the carcinoma. "Adenocarcinoma" with no subtype means
+      acinar_adenocarcinoma.
+
+  - id: gleason_primary
+    type: integer
+    allowed: [1, 2, 3, 4, 5]
+    instructions: >
+      Primary (most prevalent) Gleason pattern, the first number in the
+      Gleason score as written.
+
+  - id: gleason_secondary
+    type: integer
+    allowed: [1, 2, 3, 4, 5]
+    instructions: >
+      Secondary Gleason pattern, the second number in the Gleason score as
+      written. Not the tertiary pattern.
+
+  - id: gleason_total
+    type: integer
+    allowed: [2, 3, 4, 5, 6, 7, 8, 9, 10]
+    instructions: >
+      Gleason score (sum), as stated in the report. Do not add the patterns
+      yourself if the sum is not written.
+
+  - id: grade_group
+    type: integer
+    allowed: [1, 2, 3, 4, 5]
+    instructions: >
+      ISUP/WHO Grade Group, only when the report literally prints it ("Grade
+      Group 3", "ISUP 3", "WHO grade group 3"). A Gleason score alone is not a
+      Grade Group: then status is not_mentioned. Never compute it from the
+      Gleason patterns; the engine derives it after extraction, with
+      provenance.
+
+  - id: tumor_percent_of_gland
+    type: number
+    unit: percent
+    tier: hard
+    instructions: >
+      Percentage of the prostate involved by tumor, if stated
+      ("approximately 15% of the gland").
+
+  - id: tumor_dimension
+    type: measurement
+    units: [mm, cm]
+    tier: hard
+    instructions: >
+      Greatest dimension of the dominant tumor nodule, if stated.
+
+  # --- Extent and invasion (findings: present = value, negative = explicitly_absent)
+  - id: extraprostatic_extension
+    type: enum
+    kind: finding
+    allowed: [focal, nonfocal, present_unspecified]
+    instructions: >
+      Extraprostatic extension. "Established" or "extensive" is nonfocal.
+
+  - id: seminal_vesicle_invasion
+    type: enum
+    kind: finding
+    allowed: [left, right, bilateral, present_unspecified]
+    instructions: >
+      Seminal vesicle invasion by carcinoma; value gives the side if stated.
+
+  - id: margin_positive
+    type: enum
+    kind: finding
+    allowed: [focal, extensive, present_unspecified]
+    instructions: >
+      Carcinoma at the inked surgical margin. "Margins negative" or "free of
+      tumor" is explicitly_absent.
+
+  - id: margin_location
+    type: string
+    tier: hard
+    instructions: >
+      Named location(s) of a positive margin (e.g. "right posterolateral",
+      "apex"). not_mentioned when margins are negative.
+
+  - id: margin_distance
+    type: measurement
+    units: [mm, cm]
+    tier: hard
+    instructions: >
+      Distance of tumor to the closest margin, when margins are negative and
+      the distance is stated.
+
+  - id: lymphovascular_invasion
+    type: enum
+    kind: finding
+    allowed: [present]
+    instructions: Lymphovascular (angiolymphatic) invasion.
+
+  - id: perineural_invasion
+    type: enum
+    kind: finding
+    allowed: [present]
+    instructions: Perineural invasion.
+
+  # --- Nodes and stage ---------------------------------------------------------
+  - id: nodes_examined
+    type: integer
+    tier: deterministic
+    instructions: >
+      Total number of regional lymph nodes examined. explicitly_absent if the
+      report says no lymph nodes were submitted or found.
+
+  - id: nodes_positive
+    type: integer
+    tier: deterministic
+    instructions: Number of lymph nodes containing metastatic carcinoma.
+
+  - id: pT
+    type: enum
+    allowed: [pT2, pT2a, pT2b, pT2c, pT2+, pT3, pT3a, pT3b, pT4, pTX]
+    tier: deterministic
+    instructions: >
+      Pathologic T stage as written. Include the "p" prefix; drop other
+      prefixes or suffixes (y, m, r) and record them in evidence.
+
+  - id: pN
+    type: enum
+    allowed: [pN0, pN1, pNX]
+    tier: deterministic
+    instructions: Pathologic N stage as written, with the "p" prefix.
+
+  # --- Treatment ---------------------------------------------------------------
+  - id: treatment_effect
+    type: enum
+    kind: finding
+    allowed: [minimal, moderate, marked, present_unspecified]
+    tier: hard
+    instructions: >
+      Histologic evidence of prior therapy (hormonal or radiation effect) on
+      the carcinoma.
+
+# -----------------------------------------------------------------------------
+# Cross-field rules. Grammar-constrained decoding guarantees each field's shape
+# but cannot express relationships between fields; these catch those.
+# A rule runs only when every field it names has status=value.
+# Functions available in rules come from the whitelisted library in
+# engine/rules.py (e.g. grade_group_from).
+# -----------------------------------------------------------------------------
+validation:
+  - id: gleason_sum
+    rule: "gleason_primary + gleason_secondary == gleason_total"
+    on_fail: retry_then_flag     # Phase 2 wires the retry; Phase 1 just flags
+
+  - id: grade_group_matches_gleason
+    rule: "grade_group == grade_group_from(gleason_primary, gleason_secondary)"
+    on_fail: retry_then_flag
+
+  - id: nodes_positive_le_examined
+    rule: "nodes_positive <= nodes_examined"
+    on_fail: retry_then_flag
+
+  - id: pN_matches_nodes
+    rule: "(pN == 'pN1') == (nodes_positive > 0)"
+    on_fail: flag
+
+# -----------------------------------------------------------------------------
+# Derived fields (engine-computed, see base pack). Grade Group is scored
+# against TCGA gold but older reports print only the Gleason score, so when
+# the model finds no stated Grade Group the engine computes it from the
+# extracted patterns. The record carries derivation: stated | computed_from_gleason.
+# -----------------------------------------------------------------------------
+derived_fields:
+  - id: grade_group
+    derivation: computed_from_gleason
+    inputs: [gleason_primary, gleason_secondary]
+    rule: "grade_group_from(gleason_primary, gleason_secondary)"
+    when: not_stated
+    evidence: inherit
+    stated_column: grade_group_printed     # gold column: does the report text print a Grade Group?
+    eval_note: >
+      TCGA gold Grade Group is derived from the Gleason patterns for every
+      case (GDC records none), so both subsets are scored against a
+      Gleason-derived value: on `stated`, a report whose printed Grade Group
+      disagrees with its own Gleason score cannot score correct, and on the
+      derived subset a Gleason error and a Grade Group error are the same
+      error counted twice. None of the 446 staged TCGA-PRAD reports prints a
+      Grade Group (they predate the 2014 ISUP system), so here `stated` is
+      empty and every "stated" Grade Group the model claims is invented.
+
+# -----------------------------------------------------------------------------
+# Case-level precedence (several reports for one patient). Declared now,
+# executed in Phase 2. Rules confirmed with the clinical side before Phase 5.
+# -----------------------------------------------------------------------------
+reconciliation:
+  precedence: [prostatectomy_over_biopsy, highest_grade_among_cores]
+
+# Filled in Phase 1 (exemplar selection, with the chosen cases excluded from the eval).
+exemplars: []
+#  - {source: exemplars/ex01.txt, output: exemplars/ex01.json}
+
+eval:
+  gold: labels/tcga_prad_gold.csv
+  id_column: case_id
+  scored: [gleason_primary, gleason_secondary, gleason_total, grade_group, pT, pN]

@@ -1,0 +1,40 @@
+# Singularity/Apptainer definition for Seadragon (SLURM batch). Mirrors
+# containers/Dockerfile step for step; keep the two in sync.
+#
+#   # from the repo root (the %files section copies the working directory):
+#   apptainer build clinical-extraction-engine.sif containers/singularity.def
+#
+#   # or, once the Docker image is pushed to a registry, derive directly:
+#   apptainer build clinical-extraction-engine.sif docker://ghcr.io/<owner>/clinical-extraction-engine:latest
+#
+#   # run (vLLM/Ollama server reached over HTTP; set OLLAMA_HOST or the backend's host):
+#   apptainer exec --bind data:/app/data,runs:/app/runs clinical-extraction-engine.sif \
+#       python -m evalharness.runner --pack packs/prostate_pathology --model <model> --reports data/tcga_prad/reports
+
+Bootstrap: docker
+From: python:3.12-slim
+
+%files
+    pyproject.toml /app/pyproject.toml
+    README.md /app/README.md
+    engine /app/engine
+    evalharness /app/evalharness
+    adapters /app/adapters
+    scripts /app/scripts
+    packs /app/packs
+    tests /app/tests
+
+%post
+    cd /app
+    pip install --no-cache-dir -e ".[dev]"
+
+%environment
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONUNBUFFERED=1
+    export CEE_RUNS_DIR=/app/runs
+
+%test
+    cd /app && pytest -q
+
+%runscript
+    cd /app && exec python -m evalharness.runner "$@"

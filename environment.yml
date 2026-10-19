@@ -1,0 +1,14 @@
+# Conda/mamba environment (miniforge). The package list itself lives in
+# pyproject.toml; this only pins the interpreter to match the containers and
+# installs the project in editable mode.
+#
+#   mamba env create -f environment.yml      # or: conda env create -f environment.yml
+#   conda activate cee
+name: cee
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - -e .[dev]

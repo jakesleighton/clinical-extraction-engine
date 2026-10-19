@@ -1,0 +1,32 @@
+# Data and run outputs never enter the public repo.
+data/*
+!data/.gitkeep
+!data/weird_cases.md
+!data/tcga_prad/
+data/tcga_prad/*
+!data/tcga_prad/working_set.txt
+runs/*
+!runs/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Local working notes and project-internal documents (handoff doc, build
+# briefs, session notes) live in notes/ and are never published. The two
+# documents are also matched by name, so a move does not expose them.
+notes/
+ClinicalNotesExtraction_Handoff_v*.md
+PHASE0_BRIEF.md

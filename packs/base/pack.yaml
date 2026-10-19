@@ -1,0 +1,190 @@
+# =============================================================================
+# BASE PACK — document-agnostic machinery
+# =============================================================================
+# Every extension pack (prostate_pathology, later breast / transfusion) declares
+# `extends: base` and inherits everything here. The base pack holds the "hard
+# machinery" that is the same for any clinical document: the three-state status,
+# hedging levels, evidence spans, amendment and temporal rules, and field
+# defaults. Extension packs supply vocabulary: fields, enums, exemplars,
+# validation rules, derivations, precedence.
+#
+# Merge rules the loader applies (engine/packloader.py):
+#   - scalars and mappings: extension overrides base, key by key
+#   - `fields` and `derived_fields`: merged by `id`; an extension entry with the
+#     same id replaces the base entry
+#   - `validation`: concatenated (base rules first)
+#   - `instructions.global`: base text first, then the extension's `instructions.domain`
+#   - `exemplars`, `eval`, `document`: taken from the extension
+# =============================================================================
+
+pack:
+  name: base
+  version: 1
+  extends: null
+
+# -----------------------------------------------------------------------------
+# Field defaults. Any key a field omits is filled from here.
+# -----------------------------------------------------------------------------
+defaults:
+  field:
+    status: three_state     # value | explicitly_absent | not_mentioned
+    evidence: required      # required | optional
+    tier: standard          # deterministic | standard | hard
+    kind: attribute         # attribute | finding  (see `kinds` below)
+
+# -----------------------------------------------------------------------------
+# Vocabularies the engine relies on. Packs may read these but should not
+# redefine them: the prompt builder, validator and eval harness all key off
+# these exact strings.
+# -----------------------------------------------------------------------------
+status_values:
+  value: The document states this item; `value` holds it.
+  explicitly_absent: The document explicitly says it is absent, negative, not identified, or not applicable.
+  not_mentioned: The document is silent on this item. Silence is not absence.
+
+hedging_levels:             # how firmly the document asserts the value, most to least certain
+  definite: Stated without qualification.
+  probable: '"consistent with", "most likely", "favor", "suggestive of".'
+  possible: '"cannot exclude", "possible", "suspicious for", "questionable".'
+  indeterminate: '"cannot be assessed", "indeterminate", specimen inadequate for this item.'
+
+kinds:
+  attribute: >
+    A property that takes a value (a grade, a count, a stage, a date).
+    explicitly_absent means the document says it does not apply or does not
+    exist (e.g. "no residual carcinoma" for a grade).
+  finding: >
+    Something that is either present or not (extension, invasion, a positive
+    margin). status=value means the finding IS present, and `value` gives its
+    detail. A negative statement ("not identified", "negative", "free of
+    tumor") is status=explicitly_absent, never status=value.
+
+field_types:                # the only types a pack field may declare
+  integer: Whole number. `allowed` restricts it to a list.
+  number: Real number; `unit` names its fixed unit (e.g. percent).
+  string: Free text, copied or lightly normalized from the document.
+  enum: One of the pack's `allowed` values, exactly as spelled there.
+  date: ISO 8601 (YYYY-MM-DD); partial dates as YYYY-MM or YYYY.
+  measurement: Number plus a unit from `units`.
+
+# -----------------------------------------------------------------------------
+# The per-field output envelope: what the MODEL generates for every field.
+# The prompt builder turns each field into an object with these properties,
+# IN THIS ORDER. Order matters: the model generates left to right, so asking
+# for the evidence quote first makes it locate the text before committing to
+# a value.
+# -----------------------------------------------------------------------------
+envelope:
+  - name: evidence
+    description: >
+      Verbatim quotes from the document that support the answer, copied
+      character for character. Empty list when status is not_mentioned; otherwise
+      at least one quote.
+      The engine finds each quote in the source and stores its character
+      offsets (start, end); a quote it cannot find is a validation failure.
+  - name: status
+    description: One of status_values.
+  - name: value
+    description: Typed per the field; null unless status is value.
+  - name: unit
+    description: Only for measurement fields; one of the field's `units`.
+  - name: hedging
+    description: One of hedging_levels; definite unless the document qualifies it.
+  - name: conflict
+    description: >
+      true when different parts of the document disagree on this item
+      (synoptic vs narrative, original vs addendum, two specimen parts).
+
+# -----------------------------------------------------------------------------
+# Keys the ENGINE adds to each field after validation (the model never writes
+# these). Documented here so pack authors know what a record looks like.
+#   evidence[].start / evidence[].end  character offsets of each quote in the
+#                                      source text (null when not found)
+#   derivation                         provenance of the value:
+#                                        stated   - the model extracted it
+#                                        <label>  - filled by a derived_fields
+#                                                   rule (its `derivation` label)
+#                                        null     - no value
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Derived fields: values the engine computes from other extracted fields,
+# deterministically, AFTER validation. The model never calculates; it only
+# reports what the document states. A pack declares a derivation when a
+# scored item is routinely implied rather than written (Grade Group from the
+# Gleason patterns). Each entry:
+#   id          the field this fills (must be a declared field)
+#   derivation  provenance label written to the record, e.g. computed_from_gleason
+#   inputs      fields the rule may reference
+#   rule        expression over `inputs` using the same whitelisted function
+#               library as `validation` (engine/rules.py)
+#   when        not_stated (default): only fill when the model did not state it
+#               always: compute regardless and flag disagreement with a stated value
+#   evidence    inherit (default): the record carries the inputs' evidence spans
+#   eval_note   text the eval report prints next to this field's metrics
+# The eval harness reports every derived field two ways: on the subset where
+# the value was stated, and case-level (stated + derived).
+# -----------------------------------------------------------------------------
+derived_fields: []          # base derives nothing; packs add entries
+
+# -----------------------------------------------------------------------------
+# Instructions that open every extraction prompt, for any document type.
+# -----------------------------------------------------------------------------
+instructions:
+  global: |
+    You extract structured data from a single clinical document. Answer only
+    from the document text. Do not use outside knowledge of the patient, and
+    do not infer or calculate values the document does not state.
+
+    For every field:
+    1. Find the supporting text first and copy it exactly into `evidence`.
+    2. Choose `status`: value if the document states it; explicitly_absent if
+       the document says it is absent, negative, or not applicable;
+       not_mentioned if the document is silent. Silence is not absence, and a
+       silent document means an empty `evidence` list: do not quote text to
+       show that something is missing.
+    3. Record `hedging` when the document qualifies the statement
+       ("consistent with", "suspicious for", "cannot be assessed").
+
+    Negation: "no", "negative for", "not identified", "free of", "without"
+    make a finding explicitly_absent. Check the scope of the negation: in
+    "no lymphovascular invasion; perineural invasion present" only LVI is
+    negated.
+
+    Amendments and addenda: if an addendum, amendment, or revised diagnosis
+    changes an item, report the revised value, quote the revised text, and set
+    conflict to true.
+
+    Internal conflicts: if two parts of the document disagree (for example a
+    synoptic table and the narrative), report the value from the synoptic or
+    final diagnosis section, quote both statements, and set conflict to true.
+    Do not silently choose.
+
+    Time: extract only findings about the specimen this document reports.
+    Mentions of prior specimens, prior reports, or history ("previous biopsy
+    showed...") are not extracted.
+
+# -----------------------------------------------------------------------------
+# Defaults for case-level reconciliation (grouping several documents for one
+# patient). Declared now, executed in Phase 2.
+# -----------------------------------------------------------------------------
+reconciliation:
+  precedence: []            # extension packs list their rules in priority order
+  on_unresolved: flag       # never pick silently
+
+# -----------------------------------------------------------------------------
+# Ablation switches. Every agentic feature ships behind one of these so its
+# eval delta can be measured. All off in Phase 0/1; Phase 2 wires them.
+# -----------------------------------------------------------------------------
+features:
+  evidence_verification: false   # check quotes against source, re-ask on miss
+  validation_retry: false        # re-prompt with the validator's error message
+  self_consistency:
+    enabled: false
+    k: 5
+  verifier_agent: false          # second model/prompt cross-checks the extractor
+  reconciliation: false          # apply case-level precedence across documents
+
+validation: []              # base has no cross-field rules; packs add them
+
+fields: []                  # base declares no fields; packs add them
