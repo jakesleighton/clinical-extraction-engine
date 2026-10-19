@@ -157,6 +157,7 @@ class Reconciliation(_Strict):
 class Exemplar(_Strict):
     source: str
     output: str
+    case_id: str | None = None   # the eval case the exemplar was taken from; the eval runner never scores it
 
 
 class EvalSpec(_Strict):
@@ -224,6 +225,13 @@ class Pack(_Strict):
             if d.id == field_id:
                 return d
         return None
+
+    @property
+    def exemplar_ids(self) -> list[str]:
+        """Case ids the exemplars were taken from. They sit in the prompt, so
+        scoring them would be leakage: the eval runner holds them out of every
+        run, whatever ``--ids`` or ``--cases`` asks for."""
+        return [ex.case_id for ex in self.exemplars if ex.case_id]
 
     def resolve(self, relative: str) -> Path:
         """A path written in the pack, resolved against the pack directory."""
@@ -298,6 +306,10 @@ class Pack(_Strict):
             if unknown:
                 raise ValueError(f"eval.scored references unknown fields {sorted(unknown)}")
 
+        ex_ids = self.exemplar_ids
+        dupes = sorted({i for i in ex_ids if ex_ids.count(i) > 1})
+        if dupes:
+            raise ValueError(f"exemplars: duplicate case_id {dupes}")
         if self.root is not None:
             for ex in self.exemplars:
                 for p in (ex.source, ex.output):
@@ -514,7 +526,8 @@ def describe(pack: Pack) -> str:
     sc = feats.pop("self_consistency")
     on = [k for k, v in feats.items() if v] + (["self_consistency"] if sc["enabled"] else [])
     lines.append(f"features on: {', '.join(on) or 'none'}  (switches: {', '.join(feats)}, self_consistency k={sc['k']})")
-    lines.append(f"exemplars: {len(pack.exemplars)}")
+    lines.append(f"exemplars: {len(pack.exemplars)}"
+                 + (f"  (held out of every eval: {', '.join(pack.exemplar_ids)})" if pack.exemplar_ids else ""))
     if pack.eval:
         lines.append(f"eval: gold={pack.eval.gold}  id_column={pack.eval.id_column}  scored={pack.eval.scored}")
     return "\n".join(lines)

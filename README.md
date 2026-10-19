@@ -106,6 +106,9 @@ python -m engine.extract data/tcga_prad/reports/<case_id>.txt \
 # the Phase 1 loop: the working set, scored (--cases ID ... runs specific cases instead)
 python -m evalharness.runner --pack packs/prostate_pathology --model qwen2.5:7b \
     --reports data/tcga_prad/reports --ids data/tcga_prad/working_set.txt
+# thinking models (Qwen 3.5, Gemma 4) run with thinking off (--think false is the default);
+# gpt-oss only takes a level, so pass --think low. With exemplars in the prompt the context
+# window defaults to 16384 tokens (--num-ctx overrides); without them it stays at 8192.
 ```
 
 `OLLAMA_HOST` points the Ollama backend somewhere other than
@@ -121,7 +124,9 @@ packs/
   prostate_pathology/
     pack.yaml                     extends: base. Fields, enums, cross-field rules,
                                   derived fields, precedence, eval spec
-    exemplars/                    (document, expected JSON) pairs shown in the prompt (none yet; Phase 1)
+    exemplars/                    (document, expected JSON) pairs shown in the prompt: three wired,
+                                  one staged for a hedging ablation; their case ids are held
+                                  out of every eval run
     labels/tcga_prad_gold.csv     gold labels for the scored fields
 ```
 

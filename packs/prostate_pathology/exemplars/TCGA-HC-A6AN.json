@@ -1,0 +1,212 @@
+{
+ "specimen_procedure": {
+  "evidence": [
+   "Procedure: Radical prostatectomy"
+  ],
+  "status": "value",
+  "value": "radical_prostatectomy",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "tumor_laterality": {
+  "evidence": [
+   "There is extensive involvement of gland bilaterally"
+  ],
+  "status": "value",
+  "value": "bilateral",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "report_date": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "collection_date": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "histologic_type": {
+  "evidence": [
+   "Prostatic adenocarcinoma, Gleason grade 4 + 3 (sum = 7)",
+   "Histologic Type: Adenocarcinoma"
+  ],
+  "status": "value",
+  "value": "acinar_adenocarcinoma",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "gleason_primary": {
+  "evidence": [
+   "Gleason grade 4 + 3 (sum = 7)",
+   "Primary Pattern: 4"
+  ],
+  "status": "value",
+  "value": 4,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "gleason_secondary": {
+  "evidence": [
+   "Gleason grade 4 + 3 (sum = 7)",
+   "Secondary Pattern: 3"
+  ],
+  "status": "value",
+  "value": 3,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "gleason_total": {
+  "evidence": [
+   "Gleason grade 4 + 3 (sum = 7)",
+   "Total Gleason Score: 7"
+  ],
+  "status": "value",
+  "value": 7,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "grade_group": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "tumor_percent_of_gland": {
+  "evidence": [
+   "approximately 20% of the gland showing involvement by tumor",
+   "Proportion of prostate involved by tumor: 20%"
+  ],
+  "status": "value",
+  "value": 20,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "tumor_dimension": {
+  "evidence": [
+   "a 2.0 cm in greatest dimension firm, white-tan. lesion located in the right posterior and anterior prostate"
+  ],
+  "status": "value",
+  "value": 2.0,
+  "unit": "cm",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "extraprostatic_extension": {
+  "evidence": [
+   "Focal extraprostatic extension is identified at the right. apex and right anterior prostate",
+   "Extraprostatic Extension: Present, focal, right apex"
+  ],
+  "status": "value",
+  "value": "focal",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "seminal_vesicle_invasion": {
+  "evidence": [
+   "Benign seminal vesicles",
+   "Seminal Vesicle Invasion: Not identified"
+  ],
+  "status": "explicitly_absent",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "margin_positive": {
+  "evidence": [
+   "Tumor is identified at the surgical margin at the right. anterior prostate (1 mm) and posteriorly on both the right and. left sides as a few foci all < 1mm",
+   "Margins: Involved by invasive carcinoma, focal anterior and. posterior"
+  ],
+  "status": "value",
+  "value": "focal",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "margin_location": {
+  "evidence": [
+   "Tumor is identified at the surgical margin at the right. anterior prostate (1 mm) and posteriorly on both the right and. left sides",
+   "Margins: Involved by invasive carcinoma, focal anterior and. posterior"
+  ],
+  "status": "value",
+  "value": "right anterior prostate; posterior, right and left sides",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "margin_distance": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "unit": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "lymphovascular_invasion": {
+  "evidence": [
+   "Lymph-Vascular Invasion: Not identified"
+  ],
+  "status": "explicitly_absent",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "perineural_invasion": {
+  "evidence": [
+   "Perineural Invasion: Present"
+  ],
+  "status": "value",
+  "value": "present",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "nodes_examined": {
+  "evidence": [
+   "Right iliac and obturator lymph nodes: One benign lymph node (0/1)"
+  ],
+  "status": "value",
+  "value": 1,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "nodes_positive": {
+  "evidence": [
+   "One benign lymph node (0/1)"
+  ],
+  "status": "value",
+  "value": 0,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "pT": {
+  "evidence": [
+   "PATHOLOGIC STAGE: pT3a NO MX"
+  ],
+  "status": "value",
+  "value": "pT3a",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "pN": {
+  "evidence": [
+   "PATHOLOGIC STAGE: pT3a NO MX"
+  ],
+  "status": "value",
+  "value": "pN0",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "treatment_effect": {
+  "evidence": [
+   "Treatment Effect on Carcinoma: Not identified"
+  ],
+  "status": "explicitly_absent",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ }
+}

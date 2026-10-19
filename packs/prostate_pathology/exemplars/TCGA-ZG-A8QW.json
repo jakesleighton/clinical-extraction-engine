@@ -1,0 +1,201 @@
+{
+ "specimen_procedure": {
+  "evidence": [
+   "(Prostate gland): Prostate gland: Weight: 62 g, Volume: 57 ml, Size: 5.0 x 6.8 x 4.8 cm. Adherent seminal vesicles and deferent duct"
+  ],
+  "status": "value",
+  "value": "radical_prostatectomy",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "tumor_laterality": {
+  "evidence": [
+   "Tumor involves both lobes"
+  ],
+  "status": "value",
+  "value": "bilateral",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "report_date": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "collection_date": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "histologic_type": {
+  "evidence": [
+   "Poorly differentiated prostatic adenocarcinoma"
+  ],
+  "status": "value",
+  "value": "acinar_adenocarcinoma",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "gleason_primary": {
+  "evidence": [
+   "Gleason 4+5=9"
+  ],
+  "status": "value",
+  "value": 4,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "gleason_secondary": {
+  "evidence": [
+   "Gleason 4+5=9"
+  ],
+  "status": "value",
+  "value": 5,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "gleason_total": {
+  "evidence": [
+   "Gleason 4+5=9"
+  ],
+  "status": "value",
+  "value": 9,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "grade_group": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "tumor_percent_of_gland": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "tumor_dimension": {
+  "evidence": [
+   "Maximum tumor diameter: 46 mm"
+  ],
+  "status": "value",
+  "value": 46,
+  "unit": "mm",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "extraprostatic_extension": {
+  "evidence": [
+   "Tumor infiltration into prostatic adipose tissue in 6 tissue blocks mainly in. perivesical adipose tissue (invasion length 4mm, invasion depth 0.8mm)"
+  ],
+  "status": "value",
+  "value": "present_unspecified",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "seminal_vesicle_invasion": {
+  "evidence": [
+   "Tumor infiltration in. both seminal vesicles"
+  ],
+  "status": "value",
+  "value": "bilateral",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "margin_positive": {
+  "evidence": [
+   "Negative surgical margins (circumference and periurethral)"
+  ],
+  "status": "explicitly_absent",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "margin_location": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "margin_distance": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "unit": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "lymphovascular_invasion": {
+  "evidence": [
+   "Lymphatic or venous invasion was not identified",
+   "At the point of lymph node metastasis a lymphatic invasion must have been present"
+  ],
+  "status": "explicitly_absent",
+  "value": null,
+  "hedging": "definite",
+  "conflict": true
+ },
+ "perineural_invasion": {
+  "evidence": [
+   "Maximum tumor diameter: 46 mm. Perineural invasion."
+  ],
+  "status": "value",
+  "value": "present",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "nodes_examined": {
+  "evidence": [
+   "Eight tumor-free lymph node(s) (0/8)",
+   "four tumor-free lymph nodes (1/5)",
+   "pN1 (1/13)"
+  ],
+  "status": "value",
+  "value": 13,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "nodes_positive": {
+  "evidence": [
+   "One lymph node metastasis (2.9mm without extra capsular lymph. node invasion)",
+   "pN1 (1/13)"
+  ],
+  "status": "value",
+  "value": 1,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "pT": {
+  "evidence": [
+   "pT3b, Gleason 4+5=9"
+  ],
+  "status": "value",
+  "value": "pT3b",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "pN": {
+  "evidence": [
+   "pN1 (1/13)"
+  ],
+  "status": "value",
+  "value": "pN1",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "treatment_effect": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ }
+}

@@ -120,3 +120,39 @@ def test_read_id_file_skips_comments(tmp_path):
     f = tmp_path / "ids.txt"
     f.write_text("# weird cases\nTCGA-AA-0001   # two foci\n\nTCGA-AA-0002\n", encoding="utf-8")
     assert read_id_file(f) == ["TCGA-AA-0001", "TCGA-AA-0002"]
+
+
+@pytest.fixture
+def pack_with_exemplar(tmp_path: Path) -> str:
+    """A copy of the real packs whose prostate pack lists TCGA-AA-0002 as an exemplar."""
+    import json
+    import shutil
+    import yaml
+    from engine.packloader import load_pack
+    from tests.conftest import REPORT, model_output_for_report
+    packs = tmp_path / "packs_ex"
+    shutil.copytree(PACKS, packs)
+    pack_dir = packs / "prostate_pathology"
+    (pack_dir / "exemplars" / "TCGA-AA-0002.txt").write_text(REPORT, encoding="utf-8")
+    (pack_dir / "exemplars" / "TCGA-AA-0002.json").write_text(
+        json.dumps(model_output_for_report(load_pack(pack_dir))), encoding="utf-8")
+    data = yaml.safe_load((pack_dir / "pack.yaml").read_text(encoding="utf-8"))
+    data["exemplars"] = [{"case_id": "TCGA-AA-0002", "source": "exemplars/TCGA-AA-0002.txt",
+                          "output": "exemplars/TCGA-AA-0002.json"}]
+    (pack_dir / "pack.yaml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return str(pack_dir)
+
+
+def test_random_never_draws_an_exemplar_case_and_show_marks_one(staged, pack_with_exemplar, capsys):
+    argv = _argv(staged, "random", "--n", "10")
+    argv[1] = pack_with_exemplar
+    assert main(argv) == 0
+    chosen = read_id_file(staged["out"])
+    assert "TCGA-AA-0002" not in chosen and chosen == ["TCGA-AA-0001", "TCGA-AA-0003", "TCGA-AA-0004"]
+    assert "exemplar case(s) left out" in capsys.readouterr().err
+    argv = _argv(staged, "add", "TCGA-AA-0002")
+    argv[1] = pack_with_exemplar
+    assert main(argv) == 0
+    out = capsys.readouterr()
+    assert "pack exemplar: held out of every eval" in out.out
+    assert "will be held out of every eval run: TCGA-AA-0002" in out.err

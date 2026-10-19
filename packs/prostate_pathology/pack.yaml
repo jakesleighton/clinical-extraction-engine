@@ -9,7 +9,7 @@
 
 pack:
   name: prostate_pathology
-  version: 1
+  version: 2            # 1: Phase 0 scaffold; 2: Phase 1 exemplars + procedure-from-specimen rule
   extends: base
 
 document:
@@ -40,7 +40,11 @@ fields:
     tier: deterministic
     instructions: >
       The procedure that produced the main specimen. A prostatectomy with
-      attached lymph node dissection is radical_prostatectomy.
+      attached lymph node dissection is radical_prostatectomy. When the report
+      never names the procedure, classify it from the specimen it describes and
+      quote that description: a whole prostate with seminal vesicles is
+      radical_prostatectomy, needle cores are needle_biopsy, resection chips
+      are transurethral_resection.
 
   - id: tumor_laterality
     type: enum
@@ -255,9 +259,23 @@ derived_fields:
 reconciliation:
   precedence: [prostatectomy_over_biopsy, highest_grade_among_cores]
 
-# Filled in Phase 1 (exemplar selection, with the chosen cases excluded from the eval).
-exemplars: []
-#  - {source: exemplars/ex01.txt, output: exemplars/ex01.json}
+# Phase 1 exemplars (approved 2026-10-19): three clean TCGA-PRAD reports with the
+# output the model should imitate. `case_id` names the eval case an exemplar was
+# taken from; the eval runner holds those cases out of every run, since a case
+# that sits in the prompt cannot also be scored. Each pair is checked by
+# tests/test_exemplars.py (every quote found verbatim, validator clean).
+#   EJ-7315: EJ template, 4+3 with a tertiary 5, established EPE, negative margins, pT3a pN0 ("NO")
+#   HC-A6AN: CAP synoptic, focal EPE, focal positive margin with location, 0/1 nodes, pT3a
+#   ZG-A8QW: European style, 4+5, 46 mm, bilateral SVI, 1/13 nodes, pT3b pN1, LVI stated absent
+#            but argued present in a comment (conflict: true)
+exemplars:
+  - {case_id: TCGA-EJ-7315, source: exemplars/TCGA-EJ-7315.txt, output: exemplars/TCGA-EJ-7315.json}
+  - {case_id: TCGA-HC-A6AN, source: exemplars/TCGA-HC-A6AN.txt, output: exemplars/TCGA-HC-A6AN.json}
+  - {case_id: TCGA-ZG-A8QW, source: exemplars/TCGA-ZG-A8QW.txt, output: exemplars/TCGA-ZG-A8QW.json}
+# Ablation arm "+hedging exemplar": V1-A9Z7 (equivocal bladder-neck margin, hedging:
+# possible) is staged in exemplars/ but not in the prompt. Enable it only if the
+# baseline eval shows hedging failures; once listed here it is held out of the eval.
+#  - {case_id: TCGA-V1-A9Z7, source: exemplars/TCGA-V1-A9Z7.txt, output: exemplars/TCGA-V1-A9Z7.json}
 
 eval:
   gold: labels/tcga_prad_gold.csv

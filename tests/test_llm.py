@@ -24,13 +24,47 @@ def test_complete_round_trip_and_ledger(monkeypatch, runs_dir):
     assert req["model"] == "test-model" and req["prompt"] == "say x" and req["stream"] is False
     assert req["format"] == SCHEMA                              # the grammar goes with every call
     assert req["options"] == {"temperature": 0.0, "num_ctx": 8192, "num_predict": 50, "seed": 7}
+    assert req["think"] is False                                # thinking off unless asked (top-level field)
 
     [line] = list(ledger.read(runs_dir / "run1.jsonl"))
     assert line["kind"] == "llm_call" and line["call_id"] == result.call_id
     assert line["prompt_hash"] == ledger.sha256_text("say x")
     assert line["parse_ok"] is True and line["error"] is None and line["raw"] == '{"x": 1}'
     assert line["params"] == {"temperature": 0.0, "seed": 7, "num_predict": 50}
-    assert line["meta"]["done_reason"] == "stop" and "ts" in line
+    assert line["meta"]["done_reason"] == "stop" and line["meta"]["think"] is False and "ts" in line
+
+
+def test_think_level_passes_through_and_is_logged(monkeypatch, runs_dir):
+    fake = FakeOllama({"x": 1}).install(monkeypatch)
+    complete("p", SCHEMA, "gpt-oss:20b", run_id="run-think", think="low")
+    assert fake.requests[0]["think"] == "low"
+    [line] = list(ledger.read(runs_dir / "run-think.jsonl"))
+    assert line["params"]["think"] == "low" and line["meta"]["think"] == "low"
+    fake = FakeOllama({"x": 1}).install(monkeypatch)
+    complete("p", SCHEMA, "m", run_id="run-nothink", think=None)
+    assert "think" not in fake.requests[0]                      # None leaves the model's default alone
+
+
+def test_think_rejected_by_model_is_retried_without_it(monkeypatch, runs_dir):
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body)
+        if "think" in body:
+            return httpx.Response(400, json={"error": 'registry.ollama.ai/library/m:latest does not support thinking'})
+        return httpx.Response(200, json={"model": body["model"], "response": '{"x": 2}', "done": True,
+                                         "done_reason": "stop", "prompt_eval_count": 10, "eval_count": 5})
+
+    from engine.backends import ollama
+    monkeypatch.setattr(ollama, "_make_client", lambda timeout: httpx.Client(transport=httpx.MockTransport(handler)))
+    result = complete("p", SCHEMA, "m", run_id="run-retry")
+    assert result.parsed == {"x": 2} and result.error is None
+    assert len(seen) == 2 and "think" in seen[0] and "think" not in seen[1]
+    [line] = list(ledger.read(runs_dir / "run-retry.jsonl"))
+    assert line["meta"]["think"] is None and "does not support thinking" in line["meta"]["think_rejected"]
+    assert line["meta"]["think_requested"] is False             # what was asked for stays on record
+    assert "think" not in line["params"]                        # params = the caller's explicit arguments only
 
 
 def test_invalid_json_is_an_error_not_an_exception(monkeypatch, runs_dir):

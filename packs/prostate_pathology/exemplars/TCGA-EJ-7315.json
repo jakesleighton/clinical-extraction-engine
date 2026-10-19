@@ -1,0 +1,211 @@
+{
+ "specimen_procedure": {
+  "evidence": [
+   "PART 3: PROSTATE AND BILATERAL SEMINAL VESICLES, RADICAL PROSTATECTOMY"
+  ],
+  "status": "value",
+  "value": "radical_prostatectomy",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "tumor_laterality": {
+  "evidence": [
+   "THE CARCINOMA INVOLVES BOTH THE RIGHT AND LEFT LOBES",
+   "LOBE LATERALITY: Right and Left Lobes"
+  ],
+  "status": "value",
+  "value": "bilateral",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "report_date": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "collection_date": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "histologic_type": {
+  "evidence": [
+   "PROSTATE ADENOCARCINOMA, GLEASON SCORE 4 + 3 = 7",
+   "TUMOR HISTOLOGY: Adenocarcinoma NOS"
+  ],
+  "status": "value",
+  "value": "acinar_adenocarcinoma",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "gleason_primary": {
+  "evidence": [
+   "GLEASON SCORE 4 + 3 = 7",
+   "PRIMARY GLEASON GRADE: 4"
+  ],
+  "status": "value",
+  "value": 4,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "gleason_secondary": {
+  "evidence": [
+   "GLEASON SCORE 4 + 3 = 7",
+   "SECONDARY GLEASON GRADE: 3"
+  ],
+  "status": "value",
+  "value": 3,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "gleason_total": {
+  "evidence": [
+   "GLEASON SCORE 4 + 3 = 7",
+   "GLEASON SUM SCORE: 7"
+  ],
+  "status": "value",
+  "value": 7,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "grade_group": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "tumor_percent_of_gland": {
+  "evidence": [
+   "THE CARCINOMA INVOLVES 15% OF THE EXAMINED PROSTATE VOLUME"
+  ],
+  "status": "value",
+  "value": 15,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "tumor_dimension": {
+  "evidence": [
+   "GREATEST NODULAR DIAMETER OF. 1.3 CM IN ONE HISTOLOGIC SECTION",
+   "TUMOR SIZE: Maximum dimension: 1.3 cm"
+  ],
+  "status": "value",
+  "value": 1.3,
+  "unit": "cm",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "extraprostatic_extension": {
+  "evidence": [
+   "THE CARCINOMA SHOWS EVIDENCE OF ESTABLISHED EXTRACAPSULAR EXTENSION",
+   "EXTRAPROSTATIC EXTENSION: Yes - Established (> 0.8mm)"
+  ],
+  "status": "value",
+  "value": "nonfocal",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "seminal_vesicle_invasion": {
+  "evidence": [
+   "BILATERAL SEMINAL VESICLES ARE FREE OF CARCINOMA"
+  ],
+  "status": "explicitly_absent",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "margin_positive": {
+  "evidence": [
+   "ALL EXAMINED SURGICAL RESECTION MARGINS ARE FREE OF CARCINOMA",
+   "SURGICAL MARGIN INVOLVEMENT: All surgical margins free of tumor"
+  ],
+  "status": "explicitly_absent",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "margin_location": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "margin_distance": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "unit": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "lymphovascular_invasion": {
+  "evidence": [
+   "NO ANGIOLYMPHATIC INVASION IS IDENTIFIED"
+  ],
+  "status": "explicitly_absent",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "perineural_invasion": {
+  "evidence": [
+   "PERINEURAL INVASION IS IDENTIFIED"
+  ],
+  "status": "value",
+  "value": "present",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "nodes_examined": {
+  "evidence": [
+   "NO EVIDENCE OF NEOPLASIA IN FIVE LYMPH NODES (0/5)",
+   "NO EVIDENCE OF NEOPLASIA IN TWO LYMPH NODES (0/2)",
+   "LYMPH NODES EXAMINED: 7"
+  ],
+  "status": "value",
+  "value": 7,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "nodes_positive": {
+  "evidence": [
+   "LYMPH NODES POSITIVE: 0"
+  ],
+  "status": "value",
+  "value": 0,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "pT": {
+  "evidence": [
+   "PATHOLOGIC TNM STAGE: pT3a NO MX",
+   "T STAGE, PATHOLOGIC: pT3a"
+  ],
+  "status": "value",
+  "value": "pT3a",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "pN": {
+  "evidence": [
+   "PATHOLOGIC TNM STAGE: pT3a NO MX",
+   "N STAGE, PATHOLOGIC: pNO"
+  ],
+  "status": "value",
+  "value": "pN0",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "treatment_effect": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ }
+}

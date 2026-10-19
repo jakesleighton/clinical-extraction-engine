@@ -7,9 +7,12 @@
 For every case in the pack's gold CSV that has a report file
 (``<reports>/<case_id>.txt``), extract, then score the pack's ``eval.scored``
 fields. ``--ids FILE`` (one id per line, ``#`` comments) and/or ``--cases``
-restrict the run; without either, every gold case with a report runs. Outputs under ``runs/<run_id>/``: ``predictions.jsonl`` (canonical
-records), ``metrics.json`` and ``report.md``. The per-call ledger is
-``runs/<run_id>.jsonl`` as always.
+restrict the run; without either, every gold case with a report runs. Cases
+the pack lists as exemplars (``exemplars[].case_id``) are held out of every
+run, even when ``--ids``/``--cases`` names them: they are in the prompt, so
+scoring them would be leakage. Outputs under ``runs/<run_id>/``:
+``predictions.jsonl`` (canonical records), ``metrics.json`` and ``report.md``.
+The per-call ledger is ``runs/<run_id>.jsonl`` as always.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ import argparse
 import json
 import sys
 import time
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +29,7 @@ import pandas as pd
 
 from adapters import jsonl
 from engine import ledger
-from engine.extract import extract_document
+from engine.extract import EXEMPLAR_NUM_CTX, THINK_CHOICES, extract_document, parse_think
 from engine.packloader import Pack, PackError, load_pack
 from evalharness.metrics import DEFAULT_ABSENT_TOKEN, MetricsReport, compute_metrics
 
@@ -117,9 +121,11 @@ def read_id_file(path: str | Path) -> list[str]:
 
 
 def select_cases(gold: dict[str, dict[str, Any]], reports_dir: Path, ids: list[str] | None,
-                 limit: int | None) -> list[str]:
+                 limit: int | None, exclude: Collection[str] = ()) -> list[str]:
+    """The requested ids (or every gold case) that have gold and a report,
+    minus ``exclude`` (the pack's exemplar cases), then ``limit``."""
     cases = ids if ids is not None else sorted(gold)
-    cases = [c for c in cases if c in gold and (reports_dir / f"{c}.txt").exists()]
+    cases = [c for c in cases if c in gold and (reports_dir / f"{c}.txt").exists() and c not in exclude]
     return cases[:limit] if limit else cases
 
 
@@ -130,15 +136,22 @@ def run(pack: Pack, *, model: str, reports_dir: Path, backend: str = "ollama", i
     out_dir = ledger.runs_dir() / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     gold = load_gold(pack, gold_path)
-    cases = select_cases(gold, reports_dir, ids, limit)
+    exemplars = set(pack.exemplar_ids)
+    requested = ids if ids is not None else sorted(gold)
+    held_out = sorted({c for c in requested if c in exemplars})
+    if held_out:
+        print(f"  holding out {len(held_out)} exemplar case(s) listed in the pack (in the prompt, never scored): "
+              + ", ".join(held_out), file=sys.stderr)
+    cases = select_cases(gold, reports_dir, ids, limit, exclude=exemplars)
     if ids is not None:
-        usable = set(select_cases(gold, reports_dir, ids, None))
-        dropped = [c for c in ids if c not in usable]
+        usable = set(select_cases(gold, reports_dir, ids, None, exclude=exemplars))
+        dropped = [c for c in ids if c not in usable and c not in exemplars]
         if dropped:
             print(f"  skipping {len(dropped)} requested case(s) with no gold row or no report: "
                   + ", ".join(dropped[:10]) + (" ..." if len(dropped) > 10 else ""), file=sys.stderr)
     if not cases:
-        raise SystemExit(f"no cases to run: gold has {len(gold)} ids, reports in {reports_dir}")
+        raise SystemExit(f"no cases to run: gold has {len(gold)} ids, reports in {reports_dir}"
+                         + (f"; {len(held_out)} requested case(s) are pack exemplars" if held_out else ""))
     print(f"run {run_id}: {len(cases)} case(s), model {model}, backend {backend}", file=sys.stderr)
 
     predictions: dict[str, dict[str, Any] | None] = {}
@@ -161,6 +174,9 @@ def run(pack: Pack, *, model: str, reports_dir: Path, backend: str = "ollama", i
     report = compute_metrics(pack, predictions, scored_gold)
     report.notes.insert(0, f"model={model} backend={backend} pack={pack.name} v{pack.version} "
                            f"run={run_id} wall={time.perf_counter() - t0:.0f}s")
+    if exemplars:
+        report.notes.insert(1, f"pack exemplars held out of the run ({len(exemplars)}): "
+                               + ", ".join(sorted(exemplars)))
     (out_dir / "metrics.json").write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
     (out_dir / "report.md").write_text(report.to_markdown(), encoding="utf-8")
     return report, out_dir
@@ -179,14 +195,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--gold", default=None, help="override the pack's gold CSV path")
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--num-ctx", type=int, default=None)
+    ap.add_argument("--num-ctx", type=int, default=None,
+                    help=f"context window (default {EXEMPLAR_NUM_CTX} when the pack has exemplars, else the backend's)")
+    ap.add_argument("--think", default="false", choices=THINK_CHOICES,
+                    help="thinking mode for models that have one; false (default) or a level for gpt-oss")
     args = ap.parse_args(argv)
 
     pack = load_pack(args.pack)
     ids = None
     if args.ids or args.cases:
         ids = (read_id_file(args.ids) if args.ids else []) + list(args.cases or [])
-    params: dict[str, Any] = {"temperature": args.temperature, "seed": args.seed}
+    params: dict[str, Any] = {"temperature": args.temperature, "seed": args.seed, "think": parse_think(args.think)}
     if args.num_ctx:
         params["num_ctx"] = args.num_ctx
     report, out_dir = run(pack, model=args.model, reports_dir=Path(args.reports), backend=args.backend,

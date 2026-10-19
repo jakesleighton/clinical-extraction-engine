@@ -1,0 +1,203 @@
+{
+ "specimen_procedure": {
+  "evidence": [
+   "E. Prostate and seminal vesicles, radical prostatectomy"
+  ],
+  "status": "value",
+  "value": "radical_prostatectomy",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "tumor_laterality": {
+  "evidence": [
+   "Left apex (slide E2)",
+   "Right posterior mid gland (slides E6-E8)"
+  ],
+  "status": "value",
+  "value": "bilateral",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "report_date": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "collection_date": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "histologic_type": {
+  "evidence": [
+   "Type of tumor: Small acinar adenocarcinoma"
+  ],
+  "status": "value",
+  "value": "acinar_adenocarcinoma",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "gleason_primary": {
+  "evidence": [
+   "Gleason score 5+4=9"
+  ],
+  "status": "value",
+  "value": 5,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "gleason_secondary": {
+  "evidence": [
+   "Gleason score 5+4=9"
+  ],
+  "status": "value",
+  "value": 4,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "gleason_total": {
+  "evidence": [
+   "Gleason score 5+4=9"
+  ],
+  "status": "value",
+  "value": 9,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "grade_group": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "tumor_percent_of_gland": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "tumor_dimension": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "unit": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "extraprostatic_extension": {
+  "evidence": [
+   "Extraprostatic extension: Present, extensive (slides E7-E8, E11, E17-E18)"
+  ],
+  "status": "value",
+  "value": "nonfocal",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "seminal_vesicle_invasion": {
+  "evidence": [
+   "invading into bilateral seminal. vesicles",
+   "Tumor involvement of seminal vesicle: Present; both sides"
+  ],
+  "status": "value",
+  "value": "bilateral",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "margin_positive": {
+  "evidence": [
+   "Focal crushed cells weakly positive for keratin at bladder margin; see comment",
+   "These findings are equivocal for the presence of tumor cells at. the bladder margin",
+   "Margin status for tumor: Equivocal; see comment above"
+  ],
+  "status": "value",
+  "value": "focal",
+  "hedging": "possible",
+  "conflict": false
+ },
+ "margin_location": {
+  "evidence": [
+   "the right bladder margin (slide E15) demonstrates a small focus of crushed/cauterized cells at. the inked margin"
+  ],
+  "status": "value",
+  "value": "right bladder margin",
+  "hedging": "possible",
+  "conflict": false
+ },
+ "margin_distance": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "unit": null,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "lymphovascular_invasion": {
+  "evidence": [
+   "Lymphovascular invasion: Present"
+  ],
+  "status": "value",
+  "value": "present",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "perineural_invasion": {
+  "evidence": [
+   "Perineural infiltration: Present"
+  ],
+  "status": "value",
+  "value": "present",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "nodes_examined": {
+  "evidence": [
+   "No tumor in six lymph nodes (0/6)",
+   "No tumor in four lymph nodes (0/4)",
+   "total number of nodes examined: 10"
+  ],
+  "status": "value",
+  "value": 10,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "nodes_positive": {
+  "evidence": [
+   "Lymph node status: Negative"
+  ],
+  "status": "value",
+  "value": 0,
+  "hedging": "definite",
+  "conflict": false
+ },
+ "pT": {
+  "evidence": [
+   "AJCC/UICC stage: pT3bNO"
+  ],
+  "status": "value",
+  "value": "pT3b",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "pN": {
+  "evidence": [
+   "AJCC/UICC stage: pT3bNO"
+  ],
+  "status": "value",
+  "value": "pN0",
+  "hedging": "definite",
+  "conflict": false
+ },
+ "treatment_effect": {
+  "evidence": [],
+  "status": "not_mentioned",
+  "value": null,
+  "hedging": "definite",
+  "conflict": false
+ }
+}

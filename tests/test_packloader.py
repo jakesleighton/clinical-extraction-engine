@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from engine.packloader import PackError, load_merged_yaml, load_pack, merge_pack_dicts
+from engine.packloader import PackError, describe, load_merged_yaml, load_pack, merge_pack_dicts
 from tests.conftest import PACKS
 
 
@@ -157,3 +157,25 @@ def test_extension_overrides_field_and_concatenates_rules():
     assert [r["id"] for r in merged["validation"]] == ["r1", "r2"]
     assert merged["instructions"] == {"global": "G", "domain": "D"}
     assert merged["features"] == {"validation_retry": False, "self_consistency": {"enabled": False, "k": 3}}
+
+
+def test_exemplar_case_ids_are_optional_unique_and_listed(tmp_path):
+    d = _packs_dir(tmp_path)
+    ex = d / "mini" / "exemplars"
+    ex.mkdir(parents=True)
+    for name in ("one", "two"):
+        (ex / f"{name}.txt").write_text("x", encoding="utf-8")
+        (ex / f"{name}.json").write_text("{}", encoding="utf-8")
+    body = dict(GOOD, exemplars=[
+        {"case_id": "TCGA-AA-0001", "source": "exemplars/one.txt", "output": "exemplars/one.json"},
+        {"source": "exemplars/two.txt", "output": "exemplars/two.json"},            # case_id is optional
+    ])
+    (d / "mini" / "pack.yaml").write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
+    pack = load_pack(d / "mini")
+    assert pack.exemplar_ids == ["TCGA-AA-0001"]
+    assert "held out of every eval: TCGA-AA-0001" in describe(pack)
+
+    body["exemplars"][1]["case_id"] = "TCGA-AA-0001"
+    (d / "mini" / "pack.yaml").write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
+    with pytest.raises(PackError, match="duplicate case_id"):
+        load_pack(d / "mini")

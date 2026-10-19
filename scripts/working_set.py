@@ -13,7 +13,8 @@ public TCGA barcodes, no PHI, and a hand-picked list cannot be regenerated.
 Every id must have a staged report (``data/tcga_prad/reports/<id>.txt``); an
 unknown id is an error and nothing is written. ``random`` draws only from
 cases whose gold labels are complete, so the smoke test can score every
-field. ``pick`` and ``add`` accept any staged case and flag the ones whose
+field, and never from the pack's exemplar cases (the eval runner holds those
+out of every run; ``show`` marks one that is in the set). ``pick`` and ``add`` accept any staged case and flag the ones whose
 gold is missing or incomplete, because the weird cases are often exactly
 those. ``random`` refuses to replace an existing set unless ``--force``;
 ``pick`` always replaces it, which is what picking means.
@@ -24,6 +25,7 @@ from __future__ import annotations
 import argparse
 import random
 import sys
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -65,13 +67,17 @@ def load_gold_or_none(pack: Pack, path: str | Path | None) -> Gold | None:
         return None
 
 
-def gold_note(case_id: str, gold: Gold | None, scored: list[str]) -> str:
+def gold_note(case_id: str, gold: Gold | None, scored: list[str], exemplars: Collection[str] = ()) -> str:
+    notes = ["pack exemplar: held out of every eval"] if case_id in exemplars else []
     if gold is None:
-        return "no gold file"
-    if case_id not in gold:
-        return "no gold labels"
-    missing = [f for f in scored if gold[case_id].get(f) is None]
-    return "gold incomplete: " + ", ".join(missing) if missing else ""
+        notes.append("no gold file")
+    elif case_id not in gold:
+        notes.append("no gold labels")
+    else:
+        missing = [f for f in scored if gold[case_id].get(f) is None]
+        if missing:
+            notes.append("gold incomplete: " + ", ".join(missing))
+    return "; ".join(notes)
 
 
 def complete_ids(staged: set[str], gold: Gold | None, scored: list[str]) -> list[str]:
@@ -97,6 +103,7 @@ def write_set(path: Path, ids: list[str]) -> None:
 def render(ids: list[str], pack: Pack, gold: Gold | None, reports_dir: Path) -> str:
     """A plain table: case id, report length, the pack's scored gold fields, a note."""
     scored = list(pack.eval.scored) if pack.eval else []
+    exemplars = set(pack.exemplar_ids)
     header = ["case_id", "chars", *scored, "note"]
     rows: list[list[str]] = []
     for case_id in ids:
@@ -104,7 +111,7 @@ def render(ids: list[str], pack: Pack, gold: Gold | None, reports_dir: Path) -> 
         chars = str(len(report.read_text(encoding="utf-8").strip())) if report.exists() else "missing"
         labels = gold.get(case_id, {}) if gold else {}
         cells = ["" if labels.get(f) is None else str(labels[f]) for f in scored]
-        rows.append([case_id, chars, *cells, gold_note(case_id, gold, scored)])
+        rows.append([case_id, chars, *cells, gold_note(case_id, gold, scored, exemplars)])
     widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header))]
     fmt = "  ".join(f"{{:<{w}}}" for w in widths)
     lines = [fmt.format(*header).rstrip(), fmt.format(*["-" * w for w in widths]).rstrip()]
@@ -151,11 +158,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"working set already has {len(current)} case(s) in {out}; pass --force to replace it, "
                   f"or `pick`/`add` to change it", file=sys.stderr)
             return 1
-        eligible = complete_ids(staged, gold, scored)
+        exemplars = set(pack.exemplar_ids)
+        eligible = [c for c in complete_ids(staged, gold, scored) if c not in exemplars]
         chosen = draw_random(eligible, args.n, args.seed)
         write_set(out, chosen)
-        print(f"working set: {len(chosen)} case(s) drawn from {len(eligible)} with complete labels "
-              f"(seed {args.seed}) -> {out}", file=sys.stderr)
+        print(f"working set: {len(chosen)} case(s) drawn from {len(eligible)} with complete labels"
+              + (f" (the pack's {len(exemplars)} exemplar case(s) left out)" if exemplars else "")
+              + f" (seed {args.seed}) -> {out}", file=sys.stderr)
     else:
         ids = dedupe([normalize_id(i) for i in args.ids])
         if args.cmd == "remove":
@@ -179,6 +188,10 @@ def main(argv: list[str] | None = None) -> int:
     if flagged and gold is not None:
         print(f"note: {len(flagged)} case(s) have missing or incomplete gold; the eval scores "
               f"only the fields it has", file=sys.stderr)
+    in_prompt = [c for c in chosen if c in set(pack.exemplar_ids)]
+    if in_prompt:
+        print(f"note: {len(in_prompt)} case(s) are pack exemplars and will be held out of every eval run: "
+              + ", ".join(in_prompt), file=sys.stderr)
     return 0
 
 
