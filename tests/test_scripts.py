@@ -1,4 +1,5 @@
-from scripts.join_gold_labels import SCORED, label_row, parse_group, parse_pattern, parse_stage, printed_grade_group
+from scripts.join_gold_labels import (SCORED, label_row, parse_group, parse_pattern, parse_stage, printed_grade_group,
+                                      printed_stage)
 
 
 def test_parsers():
@@ -22,6 +23,25 @@ def test_printed_grade_group_regex():
     assert printed_grade_group("... Prostate.  Grade   Group 2 ...") == "Grade Group 2"
 
 
+def test_printed_stage_regex():
+    t_yes = ["Pathologic stage: pT2c pN0.", "pT3a NO MX", "ypT2 N0", "TNM STAGE: AT LEAST pT2c, pNO, pMX",
+             "AJCC/UICC stage: pT3bNOMX", "Stage: T2 NO M0, II B", "stage is T1", "STAGE = T3", "PT2",
+             "T 3a N 0", "T2c, NO"]
+    t_no = ["Gleason score 3+4=7", "pt. is a 65-year-old", "DEPT 3", "the stage of disease", "Tumor T1-weighted"]
+    n_yes = ["Pathologic stage: pT2c pN0.", "pNO (0/3)", "pNI (1/5)", "pNo, pMX", "pNX", "T2 NO M0",
+             "AJCC/UICC stage: pT3bNOMX", "pT3a, N1", "pT2c,No", "T3a NO", "pT3aN1R1", "pT3b N0 M0 R0"]
+    n_no = ["no lymph nodes submitted", "pT2c Nodes negative", "No metastasis", "N 0 nodes", "Nx."]
+    for s in t_yes:
+        assert printed_stage(s, "T") is not None, s
+    for s in t_no:
+        assert printed_stage(s, "T") is None, s
+    for s in n_yes:
+        assert printed_stage(s, "N") is not None, s
+    for s in n_no:
+        assert printed_stage(s, "N") is None, s
+    assert printed_stage("summary:  pT3b, max. diameter", "T") == "pT3"
+
+
 ALLOWED = {"gleason_primary": [1, 2, 3, 4, 5], "gleason_secondary": [1, 2, 3, 4, 5],
            "gleason_total": [2, 3, 4, 5, 6, 7, 8, 9, 10], "grade_group": [1, 2, 3, 4, 5],
            "pT": ["pT2", "pT2a", "pT2b", "pT2c", "pT2+", "pT3", "pT3a", "pT3b", "pT4", "pTX"], "pN": ["pN0", "pN1", "pNX"]}
@@ -36,7 +56,7 @@ def test_label_row_derives_grade_group_and_maps_stage():
     assert notes == []
     assert row == {"case_id": "TCGA-AA-0001", "gleason_primary": 4, "gleason_secondary": 3, "gleason_total": 7,
                    "grade_group": 3, "pT": "pT3a", "pN": "pN0", "grade_group_source": "derived_from_gleason",
-                   "grade_group_printed": None, "complete": True}
+                   "grade_group_printed": None, "pT_printed": None, "pN_printed": None, "complete": True}
 
 
 def test_label_row_prefers_gdc_grade_group_and_flags_unmapped():

@@ -12,22 +12,35 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from engine import ledger
+from engine.backends.ollama import DEFAULT_NUM_CTX
 from engine.llm import LLMResult, complete
 from engine.packloader import Pack, load_pack
 from engine.prompt_builder import build_prompt, build_schema
 from engine.validate import Issue, apply_derivations, validate_output
 
-# The prompt with the pack's three exemplars is roughly 9-12k tokens; the backend's
-# default context (8192) would silently truncate it from the front, dropping the
-# instructions. Runs that include exemplars get this unless the caller sets num_ctx.
-EXEMPLAR_NUM_CTX = 16384
+# A context window that is too small is silently truncated from the front,
+# dropping the instructions first. The prompt with three exemplars is about 35k
+# characters and tokenizes to 10-12k tokens (a token per 3.0-3.4 characters on
+# the models run so far), and replies run to about 2k tokens.
+NUM_CTX_STEP = 2048          # Ollama sizes the KV cache in these units
+NUM_CTX_HEADROOM = 4096      # room for the reply plus tokenizer variation
 
 THINK_CHOICES = ("false", "true", "low", "medium", "high")
+
+
+def default_num_ctx(prompt: str) -> int:
+    """Context window for ``prompt`` unless the caller sets one: a token per
+    three characters (a slight overestimate for safety) plus headroom, rounded
+    up to a multiple of 2048, never below the backend's default. Three
+    exemplars give 16384; four give 20480."""
+    need = len(prompt) // 3 + NUM_CTX_HEADROOM
+    return max(DEFAULT_NUM_CTX, -(-need // NUM_CTX_STEP) * NUM_CTX_STEP)
 
 
 def parse_think(raw: str) -> bool | str:
@@ -81,12 +94,17 @@ def extract_document(
     case_id: str | None = None,
     run_id: str | None = None,
     include_exemplars: bool = True,
+    exemplar_variants: Collection[str] = (),
     **params: Any,
 ) -> ExtractionResult:
+    """``exemplar_variants`` switches on the pack's opt-in exemplar arms (an
+    ablation); the prompt always carries the untagged exemplars unless
+    ``include_exemplars`` is false. The ledger's validation line records which
+    exemplar cases were in the prompt."""
     run_id = run_id or ledger.default_run_id()
-    if include_exemplars and pack.exemplars:
-        params.setdefault("num_ctx", EXEMPLAR_NUM_CTX)
-    prompt = build_prompt(pack, text, include_exemplars=include_exemplars)
+    shown = pack.prompt_exemplars(exemplar_variants) if include_exemplars else []
+    prompt = build_prompt(pack, text, include_exemplars=include_exemplars, exemplar_variants=exemplar_variants)
+    params.setdefault("num_ctx", default_num_ctx(prompt))
     schema = build_schema(pack)
     prompt_hash = ledger.sha256_text(prompt)
 
@@ -107,6 +125,8 @@ def extract_document(
         "pack": pack.name,
         "pack_version": pack.version,
         "prompt_hash": prompt_hash,
+        "exemplars": [ex.case_id or ex.source for ex in shown],
+        "exemplar_variants": sorted(set(exemplar_variants)),
         "llm_error": llm.error,
         "ok": record is not None and not any(i.severity == "error" for i in issues),
         "n_errors": sum(i.severity == "error" for i in issues),
@@ -128,9 +148,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--num-ctx", type=int, default=None,
-                    help=f"context window (Ollama option; default {EXEMPLAR_NUM_CTX} when the pack has exemplars)")
+                    help="context window (Ollama option; default: sized from the prompt, 16384 with three exemplars)")
     ap.add_argument("--think", default="false", choices=THINK_CHOICES,
                     help="thinking mode for models that have one; false (default) or a level for gpt-oss")
+    ap.add_argument("--exemplar-variant", action="append", default=[], metavar="NAME",
+                    help="also show the pack's exemplars tagged with this variant (an ablation arm); repeatable")
     ap.add_argument("--out", default=None, help="write the record JSON here instead of stdout")
     ap.add_argument("--show-prompt", action="store_true", help="print the prompt and exit")
     args = ap.parse_args(argv)
@@ -139,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     path = Path(args.document)
     text = path.read_text(encoding="utf-8")
     if args.show_prompt:
-        print(build_prompt(pack, text))
+        print(build_prompt(pack, text, exemplar_variants=args.exemplar_variant))
         return 0
     params: dict[str, Any] = {"think": parse_think(args.think)}
     if args.num_ctx:
@@ -147,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     run_id = args.run_id or ledger.new_run_id()
     result = extract_document(pack, text, model=args.model, backend=args.backend,
                               case_id=args.case_id or path.stem, run_id=run_id,
+                              exemplar_variants=args.exemplar_variant,
                               temperature=args.temperature, seed=args.seed, **params)
     record = result.to_record()
     out = json.dumps(record, indent=2, ensure_ascii=False)

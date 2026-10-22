@@ -9,7 +9,9 @@
 
 pack:
   name: prostate_pathology
-  version: 2            # 1: Phase 0 scaffold; 2: Phase 1 exemplars + procedure-from-specimen rule
+  version: 3            # 1: Phase 0 scaffold; 2: Phase 1 exemplars + procedure-from-specimen rule;
+                        # 3: derived pT/pN with provenance, stage instructions "as printed",
+                        #    hedging exemplar as an opt-in variant, lenient pT scoring
   extends: base
 
 document:
@@ -185,14 +187,22 @@ fields:
     allowed: [pT2, pT2a, pT2b, pT2c, pT2+, pT3, pT3a, pT3b, pT4, pTX]
     tier: deterministic
     instructions: >
-      Pathologic T stage as written. Include the "p" prefix; drop other
-      prefixes or suffixes (y, m, r) and record them in evidence.
+      Pathologic T stage as written, with the "p" prefix; drop other prefixes
+      or suffixes (y, m, r) and record them in evidence. Only a stage the
+      report prints counts ("pT3a", "T2c N0", "Stage: T2"): when no T stage
+      is written, status is not_mentioned. Never infer a stage from the
+      findings; the engine derives it after extraction, with provenance.
 
   - id: pN
     type: enum
     allowed: [pN0, pN1, pNX]
     tier: deterministic
-    instructions: Pathologic N stage as written, with the "p" prefix.
+    instructions: >
+      Pathologic N stage as written, with the "p" prefix; "pNO" or "NO" with
+      the letter O is pN0. Only a stage the report prints counts: when no N
+      stage is written, status is not_mentioned. Never infer it from the
+      lymph node counts; the engine derives it after extraction, with
+      provenance.
 
   # --- Treatment ---------------------------------------------------------------
   - id: treatment_effect
@@ -229,10 +239,19 @@ validation:
     on_fail: flag
 
 # -----------------------------------------------------------------------------
-# Derived fields (engine-computed, see base pack). Grade Group is scored
-# against TCGA gold but older reports print only the Gleason score, so when
-# the model finds no stated Grade Group the engine computes it from the
-# extracted patterns. The record carries derivation: stated | computed_from_gleason.
+# Derived fields (engine-computed, see base pack). The model only reports
+# what the document prints; the engine fills what the findings imply, and the
+# record says which (derivation: stated | computed_from_...).
+#   grade_group  older reports print only the Gleason score: computed from the
+#                patterns when the model found no printed Grade Group.
+#   pT, pN       about a fifth of the corpus (two report templates) prints no
+#                stage line at all. pT is computed from the extent findings of
+#                a radical prostatectomy, pN from the node counts, only when
+#                the report prints no stage (`when: check`: a printed stage
+#                stands, and a disagreement with the findings is flagged).
+#                The eval scores `stated` and derived cases separately,
+#                anchored on gold columns that say whether the text prints a
+#                stage (scripts/join_gold_labels.py), never on the model's claim.
 # -----------------------------------------------------------------------------
 derived_fields:
   - id: grade_group
@@ -251,6 +270,40 @@ derived_fields:
       error counted twice. None of the 446 staged TCGA-PRAD reports prints a
       Grade Group (they predate the 2014 ISUP system), so here `stated` is
       empty and every "stated" Grade Group the model claims is invented.
+
+  - id: pT
+    derivation: computed_from_findings
+    inputs:
+      specimen_procedure: required          # only a radical prostatectomy has a pathologic T
+      extraprostatic_extension: finding     # present -> its value; "not identified" -> absent; silence blocks
+      seminal_vesicle_invasion: finding
+      tumor_laterality: optional            # pT2c needs bilateral; without it the rule says pT2
+    rule: "pt_from_findings(specimen_procedure, extraprostatic_extension, seminal_vesicle_invasion, tumor_laterality)"
+    when: check                             # a printed stage stands; a disagreement is flagged
+    on_none: skip                           # a biopsy has no pathologic stage: leave pT as extracted
+    evidence: inherit
+    stated_column: pT_printed               # gold column: does the report text print a T category?
+    eval_note: >
+      computed_from_findings covers pT2 to pT3b (seminal vesicle invasion is
+      pT3b, extraprostatic extension pT3a, neither is organ-confined: pT2c
+      when bilateral, otherwise pT2); pT4 needs adjacent-organ findings the
+      pack does not extract, so a pT4 case can only be stated. The AJCC 7th
+      edition pT2 substages depend on tumor laterality and extent the text
+      often does not give, which is what the lenient column is for.
+
+  - id: pN
+    derivation: computed_from_nodes
+    inputs: [nodes_examined, nodes_positive]
+    rule: "pn_from_nodes(nodes_examined, nodes_positive)"
+    when: check
+    on_none: skip                           # no node examined: no pathologic N
+    evidence: inherit
+    stated_column: pN_printed               # gold column: does the report text print an N category?
+    eval_note: >
+      computed_from_nodes is pN1 when any examined node is positive and pN0
+      when at least one node was examined and none is; pNX is never derived.
+      The validation rule pN_matches_nodes checks the same relationship on a
+      printed stage.
 
 # -----------------------------------------------------------------------------
 # Case-level precedence (several reports for one patient). Declared now,
@@ -272,12 +325,15 @@ exemplars:
   - {case_id: TCGA-EJ-7315, source: exemplars/TCGA-EJ-7315.txt, output: exemplars/TCGA-EJ-7315.json}
   - {case_id: TCGA-HC-A6AN, source: exemplars/TCGA-HC-A6AN.txt, output: exemplars/TCGA-HC-A6AN.json}
   - {case_id: TCGA-ZG-A8QW, source: exemplars/TCGA-ZG-A8QW.txt, output: exemplars/TCGA-ZG-A8QW.json}
-# Ablation arm "+hedging exemplar": V1-A9Z7 (equivocal bladder-neck margin, hedging:
-# possible) is staged in exemplars/ but not in the prompt. Enable it only if the
-# baseline eval shows hedging failures; once listed here it is held out of the eval.
-#  - {case_id: TCGA-V1-A9Z7, source: exemplars/TCGA-V1-A9Z7.txt, output: exemplars/TCGA-V1-A9Z7.json}
+# Ablation arm "+hedging exemplar" (approved after the Phase 1 baseline showed
+# three of five models calling the deliberately hedged margin definite): V1-A9Z7
+# (equivocal bladder-neck margin, hedging: possible) is in the prompt only when a
+# run asks for it (`--exemplar-variant hedging`); its case is held out of every
+# eval regardless, so the baseline and the ablation arm score the same cases.
+  - {case_id: TCGA-V1-A9Z7, source: exemplars/TCGA-V1-A9Z7.txt, output: exemplars/TCGA-V1-A9Z7.json, variant: hedging}
 
 eval:
   gold: labels/tcga_prad_gold.csv
   id_column: case_id
   scored: [gleason_primary, gleason_secondary, gleason_total, grade_group, pT, pN]
+  lenient: {pT: prefix}    # an extra, labelled row: a printed pT3 counts against gold pT3a; exact stays the headline

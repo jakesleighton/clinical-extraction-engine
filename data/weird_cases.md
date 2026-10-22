@@ -14,6 +14,10 @@ TCGA text. "Gold" is the GDC row in
 Chosen 2026-10-19 from `data/weird_case_candidates.md`
 (`python -m scripts.weirdness_screen`), after reading the candidates in full.
 
+Gold labels that the report text does not support (found while reading the
+Phase 1 baseline outputs) are recorded case by case in `data/gold_notes.md`,
+which the eval runner reads (`--gold-notes`) to score with and without them.
+
 ## The five
 
 ### TCGA-CH-5741

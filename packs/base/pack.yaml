@@ -100,6 +100,12 @@ envelope:
 # these). Documented here so pack authors know what a record looks like.
 #   evidence[].start / evidence[].end  character offsets of each quote in the
 #                                      source text (null when not found)
+#   evidence[].match                   which locator pass found the quote:
+#                                        exact, whitespace (whitespace and case
+#                                        folded), punctuation (punctuation and
+#                                        line-break characters ignored as well;
+#                                        a . , - between two digits is kept),
+#                                        null when not found
 #   derivation                         provenance of the value:
 #                                        stated   - the model extracted it
 #                                        <label>  - filled by a derived_fields
@@ -115,12 +121,28 @@ envelope:
 # Gleason patterns). Each entry:
 #   id          the field this fills (must be a declared field)
 #   derivation  provenance label written to the record, e.g. computed_from_gleason
-#   inputs      fields the rule may reference
+#   inputs      fields the rule may reference: a list (every input must carry a
+#               value) or a mapping field -> mode:
+#                 required  must have status=value, else nothing is derived
+#                 finding   its value when present; None when the document says
+#                           the finding is absent (explicitly_absent is information);
+#                           silence (not_mentioned) blocks the derivation
+#                 optional  its value when present, else None; never blocks
 #   rule        expression over `inputs` using the same whitelisted function
 #               library as `validation` (engine/rules.py)
 #   when        not_stated (default): only fill when the model did not state it
-#               always: compute regardless and flag disagreement with a stated value
-#   evidence    inherit (default): the record carries the inputs' evidence spans
+#               check: fill when not stated; when stated, compute anyway, keep the
+#                 stated value and flag a disagreement (derivation_disagrees; a
+#                 stated value that is a coarser form of the computed one, pT3 for
+#                 pT3a, agrees)
+#               always: compute regardless, flag a disagreement and overwrite
+#   on_none     flag (default): a rule that returns None is a derivation_failed
+#               flag; skip: None means "the inputs do not pin a value", leave the
+#               field as extracted, no flag
+#   evidence    inherit (default): the record carries the contributing inputs'
+#               evidence spans (an absent finding's quote included)
+#   stated_column  gold column (true/false/blank) saying whether the document
+#               prints the value; the eval anchors its stated/derived subsets on it
 #   eval_note   text the eval report prints next to this field's metrics
 # The eval harness reports every derived field two ways: on the subset where
 # the value was stated, and case-level (stated + derived).

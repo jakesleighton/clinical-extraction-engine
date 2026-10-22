@@ -2,9 +2,11 @@
 data/*
 !data/.gitkeep
 !data/weird_cases.md
+!data/gold_notes.md
 !data/tcga_prad/
 data/tcga_prad/*
 !data/tcga_prad/working_set.txt
+!data/tcga_prad/case_groups.csv
 runs/*
 !runs/.gitkeep
 

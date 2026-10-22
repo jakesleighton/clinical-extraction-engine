@@ -17,6 +17,11 @@ A case with no prediction record at all (the model call failed) counts as
 (numbers numerically, strings case/whitespace-insensitively), so gold must be
 written in the pack's vocabulary (``pT3a``, not ``T3a``).
 
+A field named in the pack's ``eval.lenient`` gets one extra, clearly labelled
+row (``lenient_prefix``: a value at the document's own granularity, so a printed
+``pT3`` scores against gold ``pT3a``) and the ``(lenient)`` aggregates swap that
+row in; exact match stays the headline.
+
 Fields with a ``derived_fields`` entry are additionally reported on two
 subsets, ``stated`` and ``<derivation>``. When the derived field declares a
 ``stated_column`` and the gold carries it, the split is **gold-anchored**:
@@ -59,6 +64,17 @@ def canon(v: Any) -> Any:
 
 def _safe_div(a: float, b: float) -> float | None:
     return a / b if b else None
+
+
+def lenient_match(kind: str, value: Any, gold: Any) -> bool:
+    """``prefix``: equal after canonicalization, or either string a prefix of
+    the other (``pT3`` against ``pT3a``, in either direction)."""
+    a, b = canon(value), canon(gold)
+    if a == b:
+        return True
+    if kind == "prefix" and isinstance(a, str) and isinstance(b, str):
+        return a.startswith(b) or b.startswith(a)
+    return False
 
 
 @dataclass
@@ -147,6 +163,10 @@ class Aggregate:
                 "micro_f1": self.micro_f1, "macro_f1": self.macro_f1}
 
 
+def pct(x: float | None, digits: int = 1) -> str:
+    return "-" if x is None else f"{100 * x:.{digits}f}"
+
+
 @dataclass
 class MetricsReport:
     fields: list[FieldScore]
@@ -155,15 +175,22 @@ class MetricsReport:
     n_cases: int
     n_missing_predictions: int
     notes: list[str] = field(default_factory=list)
+    lenient: list[Aggregate] = field(default_factory=list)   # the tier/overall aggregates with lenient rows swapped in
+
+    def aggregate(self, name: str) -> Aggregate | None:
+        for agg in [*self.tiers, self.overall, *self.lenient]:
+            if agg.name == name:
+                return agg
+        return None
 
     def to_dict(self) -> dict[str, Any]:
         return {"n_cases": self.n_cases, "n_missing_predictions": self.n_missing_predictions,
                 "fields": [f.to_dict() for f in self.fields], "tiers": [t.to_dict() for t in self.tiers],
-                "overall": self.overall.to_dict(), "notes": self.notes}
+                "overall": self.overall.to_dict(), "lenient": [a.to_dict() for a in self.lenient],
+                "notes": self.notes}
 
-    def to_markdown(self) -> str:
-        def pct(x: float | None) -> str:
-            return "-" if x is None else f"{100 * x:.1f}"
+    def tables_markdown(self) -> str:
+        """The per-field table and the aggregate table, without the notes."""
         lines = [f"Cases scored: {self.n_cases} (no prediction for {self.n_missing_predictions})", "",
                  "| field | subset | tier | n | TP | FP | FN | P | R | F1 | acc | cov |",
                  "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
@@ -172,12 +199,16 @@ class MetricsReport:
                          f"{pct(f.precision)} | {pct(f.recall)} | {pct(f.f1)} | {pct(f.accuracy)} | {pct(f.coverage)} |")
         lines += ["", "| group | fields | TP | FP | FN | micro-P | micro-R | micro-F1 | macro-F1 |",
                   "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
-        for agg in [*self.tiers, self.overall]:
+        for agg in [*self.tiers, self.overall, *self.lenient]:
             lines.append(f"| {agg.name} | {len(agg.fields)} | {agg.tp} | {agg.fp} | {agg.fn} | "
                          f"{pct(agg.micro_precision)} | {pct(agg.micro_recall)} | {pct(agg.micro_f1)} | {pct(agg.macro_f1)} |")
-        if self.notes:
-            lines += ["", "Notes:"] + [f"- {n}" for n in self.notes]
         return "\n".join(lines) + "\n"
+
+    def to_markdown(self) -> str:
+        text = self.tables_markdown()
+        if self.notes:
+            text += "\nNotes:\n" + "".join(f"- {n}\n" for n in self.notes)
+        return text
 
 
 def _prediction(record: dict[str, Any] | None, field_id: str) -> tuple[bool, Any, str | None]:
@@ -192,7 +223,10 @@ def _prediction(record: dict[str, Any] | None, field_id: str) -> tuple[bool, Any
 
 def score_field(field_id: str, tier: str, predictions: dict[str, dict[str, Any] | None],
                 gold: dict[str, dict[str, Any]], *, subset: str = "all",
-                case_filter: set[str] | None = None, absent_token: str = DEFAULT_ABSENT_TOKEN) -> FieldScore:
+                case_filter: set[str] | None = None, absent_token: str = DEFAULT_ABSENT_TOKEN,
+                lenient: str | None = None) -> FieldScore:
+    """``lenient`` names a :func:`lenient_match` kind; by default a value must
+    equal the gold after canonicalization."""
     score = FieldScore(field=field_id, tier=tier, subset=subset)
     for case_id, gold_row in gold.items():
         if case_filter is not None and case_id not in case_filter:
@@ -208,7 +242,7 @@ def score_field(field_id: str, tier: str, predictions: dict[str, dict[str, Any] 
                 score.fp += 1
             else:
                 score.tn += 1
-        elif has_value and canon(value) == canon(g):
+        elif has_value and (lenient_match(lenient, value, g) if lenient else canon(value) == canon(g)):
             score.tp += 1
         elif has_value:
             score.fp += 1
@@ -266,6 +300,13 @@ def compute_metrics(pack: Pack, predictions: dict[str, dict[str, Any] | None], g
                              + ", i.e. whether the model claims it found the value stated.")
             if derived.eval_note:
                 notes.append(f"{fid}: {' '.join(derived.eval_note.split())}")
+        kind = pack.eval.lenient.get(fid) if pack.eval else None
+        if kind:
+            scores.append(score_field(fid, spec.tier or "standard", predictions, gold, subset=f"lenient_{kind}",
+                                      lenient=kind, absent_token=absent_token))
+            notes.append(f"{fid}: `lenient_{kind}` scores a value at the document's own granularity "
+                         f"(either value a prefix of the other, so a printed pT3 counts against gold pT3a). "
+                         f"Exact match (`all`) is the headline; the lenient row feeds only the `(lenient)` aggregates.")
 
     by_tier: dict[str, list[FieldScore]] = defaultdict(list)
     for s in scores:
@@ -274,6 +315,14 @@ def compute_metrics(pack: Pack, predictions: dict[str, dict[str, Any] | None], g
     tier_order = ["deterministic", "standard", "hard"]
     tiers = [Aggregate(name=t, fields=by_tier[t]) for t in tier_order if by_tier.get(t)]
     overall = Aggregate(name="overall", fields=[s for s in scores if s.subset == "all"])
+    lenient_rows = {s.field: s for s in scores if s.subset.startswith("lenient_")}
+    lenient: list[Aggregate] = []
+    if lenient_rows:
+        def swapped(rows: list[FieldScore]) -> list[FieldScore]:
+            return [lenient_rows.get(r.field, r) for r in rows]
+        lenient = [Aggregate(name=f"{t.name} (lenient)", fields=swapped(t.fields)) for t in tiers
+                   if any(f.field in lenient_rows for f in t.fields)]
+        lenient.append(Aggregate(name="overall (lenient)", fields=swapped(overall.fields)))
     missing = sum(1 for c in gold if not predictions.get(c))
     return MetricsReport(fields=scores, tiers=tiers, overall=overall, n_cases=len(gold),
-                         n_missing_predictions=missing, notes=notes)
+                         n_missing_predictions=missing, notes=notes, lenient=lenient)

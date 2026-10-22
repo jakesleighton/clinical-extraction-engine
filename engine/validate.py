@@ -6,8 +6,9 @@ Three layers, in order:
    constrained decoding this should always pass; if it does not, the server
    did not honor the grammar and we want to know.
 2. **Semantics per field** — status/value agreement, required evidence,
-   evidence quotes located in the source (character offsets), units on
-   measurements, date formats. These are things a grammar cannot express.
+   evidence quotes located in the source (character offsets, and how strict
+   a match it took), units on measurements, date formats. These are things a
+   grammar cannot express.
 3. **Cross-field rules** — the pack's ``validation`` expressions, run only
    when every field they mention has a value.
 
@@ -70,19 +71,65 @@ class ValidationResult:
 # Evidence spans
 # ---------------------------------------------------------------------------
 
-def find_span(text: str, quote: str) -> tuple[int, int] | None:
-    """Locate ``quote`` in ``text`` and return ``(start, end)`` offsets.
+# Characters the third pass may ignore: sentence punctuation, quotes, brackets,
+# dashes and bullets. Symbols that carry a value stay significant (+ = % / < > &),
+# and a period, comma or hyphen between two digits (2.0 cm, 8,6 ng/ml, 3-4 mm,
+# 2010-10-12) stays too, so "2.0 cm" can never match "20 cm".
+_IGNORABLE = set(".,;:!?'\"`“”‘’()[]{}-–—_*|•·")
+_DIGIT_JOINERS = ".,-"
 
-    Exact match first. Failing that, a whitespace- and case-insensitive match:
-    OCR'd reports break lines in odd places and models tidy them up when they
-    copy. The returned offsets always index the original text.
+MatchKind = Literal["exact", "whitespace", "punctuation"]
+
+
+def _kept(text: str, pos: int) -> bool:
+    ch = text[pos]
+    if ch.isspace():
+        return False
+    if ch not in _IGNORABLE:
+        return True
+    return (ch in _DIGIT_JOINERS and 0 < pos < len(text) - 1
+            and text[pos - 1].isdigit() and text[pos + 1].isdigit())
+
+
+def _squeeze(text: str) -> tuple[str, list[int]]:
+    """``text`` with ignorable characters removed and the rest lower-cased, plus
+    a map from each kept character back to its offset in ``text``."""
+    chars: list[str] = []
+    index_map: list[int] = []
+    for pos, ch in enumerate(text):
+        if _kept(text, pos):
+            for c in ch.lower():            # a few letters lower-case to two characters
+                chars.append(c)
+                index_map.append(pos)
+    return "".join(chars), index_map
+
+
+def locate(text: str, quote: str) -> tuple[int, int, MatchKind] | None:
+    """Locate ``quote`` in ``text``: ``(start, end, how)`` or ``None``.
+
+    Three passes, each only tried when the previous one fails, so a quote
+    that matched before this policy still gets the same offsets:
+
+    1. ``exact``: the quote as given.
+    2. ``whitespace``: whitespace runs and letter case ignored. OCR'd reports
+       break lines in odd places and models tidy them up when they copy.
+    3. ``punctuation``: punctuation, dashes and line-break characters ignored
+       as well (decision of 2026-10-22, a narrow amendment to the exact-quote
+       policy). The TCGA-Reports OCR put a period at every original line
+       break ("prostate. adenocarcinoma"), and a model that quotes the sentence
+       without it should not be flagged. Value-bearing symbols and digit
+       separators are still significant, and a dropped or added word is still
+       a miss: the retry loop owns those.
+
+    The returned offsets always index the original text and land on the real
+    span, whichever pass found it.
     """
     quote = quote.strip().strip('"“”').strip()
     if not quote:
         return None
     i = text.find(quote)
     if i >= 0:
-        return i, i + len(quote)
+        return i, i + len(quote), "exact"
 
     norm_chars: list[str] = []
     index_map: list[int] = []
@@ -94,17 +141,30 @@ def find_span(text: str, quote: str) -> tuple[int, int] | None:
                 index_map.append(pos)
             prev_space = True
         else:
-            norm_chars.append(ch.casefold())
-            index_map.append(pos)
+            for c in ch.casefold():
+                norm_chars.append(c)
+                index_map.append(pos)
             prev_space = False
     norm_text = "".join(norm_chars)
     norm_quote = " ".join(quote.casefold().split())
     j = norm_text.find(norm_quote)
-    if j < 0:
+    if j >= 0:
+        return index_map[j], index_map[j + len(norm_quote) - 1] + 1, "whitespace"
+
+    squeezed, squeeze_map = _squeeze(text)
+    squeezed_quote, _ = _squeeze(quote)
+    if not squeezed_quote:
         return None
-    start = index_map[j]
-    end = index_map[j + len(norm_quote) - 1] + 1
-    return start, end
+    k = squeezed.find(squeezed_quote)
+    if k < 0:
+        return None
+    return squeeze_map[k], squeeze_map[k + len(squeezed_quote) - 1] + 1, "punctuation"
+
+
+def find_span(text: str, quote: str) -> tuple[int, int] | None:
+    """``(start, end)`` offsets of ``quote`` in ``text`` (see :func:`locate`), or ``None``."""
+    hit = locate(text, quote)
+    return None if hit is None else (hit[0], hit[1])
 
 
 # ---------------------------------------------------------------------------
@@ -195,12 +255,12 @@ def validate_output(pack: Pack, parsed: dict[str, Any], text: str) -> Validation
         if env.status != "not_mentioned" and not quotes and f.evidence == "required":
             issues.append(Issue("evidence_missing", f"{f.id}: status {env.status} needs an evidence quote", f.id))
         for q in quotes:
-            span = find_span(text, q)
-            if span is None:
+            hit = locate(text, q)
+            if hit is None:
                 issues.append(Issue("evidence_not_found", f"{f.id}: quote not found in source: {q[:80]!r}", f.id))
-                out["evidence"].append({"quote": q, "start": None, "end": None})
+                out["evidence"].append({"quote": q, "start": None, "end": None, "match": None})
             else:
-                out["evidence"].append({"quote": q, "start": span[0], "end": span[1]})
+                out["evidence"].append({"quote": q, "start": hit[0], "end": hit[1], "match": hit[2]})
         record[f.id] = out
 
     _run_rules(pack, record, issues)
@@ -264,37 +324,88 @@ def _weakest_hedging(pack: Pack, levels: list[str | None]) -> str | None:
     return max(present, key=order.index) if present else None
 
 
+def _derivation_inputs(d: DerivedField, record: dict[str, dict[str, Any]]) \
+        -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Values the rule runs on, per input mode, and the envelopes that
+    contributed (for inherited evidence, hedging and conflict). ``None`` when
+    an input the rule needs is not there, which means: cannot derive.
+
+    required  must carry a value
+    finding   a value when present; ``None`` when the document says the finding
+              is absent (``explicitly_absent``: that is information); silence blocks
+    optional  a value when present, else ``None``; never blocks
+    """
+    values: dict[str, Any] = {}
+    used: list[dict[str, Any]] = []
+    for fid, mode in d.input_modes.items():
+        e = record[fid]
+        if e["status"] == "value" and e["value"] is not None:
+            values[fid] = e["value"]
+            used.append(e)
+        elif mode == "finding" and e["status"] == "explicitly_absent":
+            values[fid] = None
+            used.append(e)
+        elif mode == "optional":
+            values[fid] = None
+        else:
+            return None, []
+    return values, used
+
+
+def _agrees(stated: Any, computed: Any) -> bool:
+    """A stated value agrees with the computed one when equal, or when it is a
+    coarser form of it (a printed ``pT3`` against a computed ``pT3a``)."""
+    if stated == computed:
+        return True
+    if isinstance(stated, str) and isinstance(computed, str):
+        a, b = stated.strip().casefold(), computed.strip().casefold()
+        return a.startswith(b) or b.startswith(a)
+    return False
+
+
 def apply_derivations(pack: Pack, record: dict[str, dict[str, Any]], issues: list[Issue]) -> None:
     """Fill ``derived_fields`` in place. The model never calculates; this does,
-    deterministically, and records provenance in ``derivation``."""
+    deterministically, and records provenance in ``derivation``.
+
+    ``when`` decides what happens to a value the model stated: ``not_stated``
+    leaves it alone and never computes; ``check`` computes, flags a
+    disagreement (``derivation_disagrees``) and keeps the stated value; ``always``
+    computes, flags a disagreement and overwrites.
+    """
     for d in pack.derived_fields:
         env = record[d.id]
         stated = env["status"] == "value" and env["value"] is not None
         if stated and d.when == "not_stated":
             continue
-        inputs = {i: record[i] for i in d.inputs}
-        if not all(e["status"] == "value" and e["value"] is not None for e in inputs.values()):
+        values, inputs = _derivation_inputs(d, record)
+        if values is None:
             continue                                        # cannot derive; leave the field as extracted
         try:
-            computed = compile_rule(d.rule).evaluate({i: e["value"] for i, e in inputs.items()})
+            computed = compile_rule(d.rule).evaluate(values)
         except RuleError as e:
             issues.append(Issue("derivation_error", f"{d.id}: {e}", d.id))
             continue
         spec = pack.field(d.id)
-        if computed is None or (spec.allowed is not None and computed not in spec.allowed):
+        if computed is None:
+            if d.on_none == "flag":
+                issues.append(Issue("derivation_failed", f"{d.id}: rule produced None, not an allowed value", d.id))
+            continue                                        # on_none: skip -> the inputs do not pin a value
+        if spec.allowed is not None and computed not in spec.allowed:
             issues.append(Issue("derivation_failed",
                                 f"{d.id}: rule produced {computed!r}, not an allowed value", d.id))
             continue
-        if stated and env["value"] != computed:
+        if stated and not _agrees(env["value"], computed):
             issues.append(Issue("derivation_disagrees",
                                 f"{d.id}: stated {env['value']!r} but {d.derivation} gives {computed!r}", d.id))
+        if stated and d.when == "check":
+            continue                                        # the document's own statement stands, flagged above
         env["status"], env["value"], env["derivation"] = "value", computed, d.derivation
-        env["hedging"] = _weakest_hedging(pack, [e["hedging"] for e in inputs.values()])
-        env["conflict"] = any(e["conflict"] for e in inputs.values())
+        env["hedging"] = _weakest_hedging(pack, [e["hedging"] for e in inputs])
+        env["conflict"] = any(e["conflict"] for e in inputs)
         if d.evidence == "inherit":
             seen: set[tuple[Any, ...]] = set()
             merged: list[dict[str, Any]] = []
-            for e in inputs.values():
+            for e in inputs:
                 for ev in e["evidence"]:
                     key = (ev["quote"], ev["start"], ev["end"])
                     if key not in seen:

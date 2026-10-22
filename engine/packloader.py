@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import keyword
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any, Literal
 
@@ -34,6 +35,9 @@ FieldType = Literal["integer", "number", "string", "enum", "date", "measurement"
 Tier = Literal["deterministic", "standard", "hard"]
 Kind = Literal["attribute", "finding"]
 EvidencePolicy = Literal["required", "optional"]
+# How a derived field reads each input (see packs/base/pack.yaml, derived_fields).
+InputMode = Literal["required", "finding", "optional"]
+DerivedWhen = Literal["not_stated", "check", "always"]
 
 
 class PackError(Exception):
@@ -117,12 +121,24 @@ class ValidationRule(_Strict):
 class DerivedField(_Strict):
     id: str
     derivation: str
-    inputs: list[str]
+    inputs: list[str] | dict[str, InputMode]    # a list means every input is `required`
     rule: str
-    when: Literal["not_stated", "always"] = "not_stated"
+    when: DerivedWhen = "not_stated"
+    on_none: Literal["flag", "skip"] = "flag"   # the rule returned None: a failure, or "cannot derive, leave it"
     evidence: Literal["inherit", "none"] = "inherit"
     stated_column: str | None = None    # gold column (true/false/blank): does the document print the value?
     eval_note: str | None = None
+
+    @property
+    def input_ids(self) -> list[str]:
+        return list(self.inputs)
+
+    @property
+    def input_modes(self) -> dict[str, InputMode]:
+        """Input field -> required | finding | optional (a list form is all required)."""
+        if isinstance(self.inputs, dict):
+            return dict(self.inputs)
+        return {i: "required" for i in self.inputs}
 
 
 class EnvelopeProperty(_Strict):
@@ -158,12 +174,14 @@ class Exemplar(_Strict):
     source: str
     output: str
     case_id: str | None = None   # the eval case the exemplar was taken from; the eval runner never scores it
+    variant: str | None = None   # None: always in the prompt; a name: only when a run asks for that ablation arm
 
 
 class EvalSpec(_Strict):
     gold: str
     id_column: str = "case_id"
     scored: list[str] = []
+    lenient: dict[str, Literal["prefix"]] = {}   # scored field -> extra, clearly labelled lenient score (pT3 for pT3a)
 
 
 # ---------------------------------------------------------------------------
@@ -228,10 +246,26 @@ class Pack(_Strict):
 
     @property
     def exemplar_ids(self) -> list[str]:
-        """Case ids the exemplars were taken from. They sit in the prompt, so
-        scoring them would be leakage: the eval runner holds them out of every
-        run, whatever ``--ids`` or ``--cases`` asks for."""
+        """Case ids the exemplars were taken from, variants included. They sit
+        in the prompt (or can, in an ablation arm), so scoring them would be
+        leakage: the eval runner holds them out of every run, whatever
+        ``--ids`` or ``--cases`` asks for."""
         return [ex.case_id for ex in self.exemplars if ex.case_id]
+
+    @property
+    def exemplar_variants(self) -> list[str]:
+        """The ablation arms the pack's exemplars declare (``variant`` names)."""
+        return sorted({ex.variant for ex in self.exemplars if ex.variant})
+
+    def prompt_exemplars(self, variants: Collection[str] = ()) -> list[Exemplar]:
+        """The exemplars a prompt shows: every untagged one, plus those whose
+        ``variant`` is in ``variants``. Unknown variant names are an error, so
+        a misspelt ablation flag cannot silently run the baseline prompt."""
+        unknown = sorted(set(variants) - set(self.exemplar_variants))
+        if unknown:
+            raise PackError(f"pack {self.name!r} has no exemplar variant {unknown}; "
+                            f"declared: {self.exemplar_variants or 'none'}")
+        return [ex for ex in self.exemplars if ex.variant is None or ex.variant in set(variants)]
 
     def resolve(self, relative: str) -> Path:
         """A path written in the pack, resolved against the pack directory."""
@@ -288,13 +322,13 @@ class Pack(_Strict):
             seen_derived.add(der.id)
             if der.id not in known:
                 raise ValueError(f"derived_fields: {der.id!r} is not a declared field")
-            unknown = set(der.inputs) - known
+            unknown = set(der.input_ids) - known
             if unknown:
                 raise ValueError(f"derived field {der.id!r}: unknown inputs {sorted(unknown)}")
-            if der.id in der.inputs:
+            if der.id in der.input_ids:
                 raise ValueError(f"derived field {der.id!r} cannot be its own input")
             refs = _rule_refs(der.rule, f"derived field {der.id!r}")
-            outside = refs - set(der.inputs)
+            outside = refs - set(der.input_ids)
             if outside:
                 raise ValueError(
                     f"derived field {der.id!r}: rule references {sorted(outside)} "
@@ -305,6 +339,9 @@ class Pack(_Strict):
             unknown = set(self.eval.scored) - known
             if unknown:
                 raise ValueError(f"eval.scored references unknown fields {sorted(unknown)}")
+            unscored = set(self.eval.lenient) - set(self.eval.scored)
+            if unscored:
+                raise ValueError(f"eval.lenient names fields that are not in eval.scored: {sorted(unscored)}")
 
         ex_ids = self.exemplar_ids
         dupes = sorted({i for i in ex_ids if ex_ids.count(i) > 1})
@@ -516,8 +553,8 @@ def describe(pack: Pack) -> str:
         lines.append(f"  {f.id:<28} {f.type:<12} {keys}" + (("  " + " ".join(extras)) if extras else ""))
     lines.append(f"derived_fields: {len(pack.derived_fields)}")
     for der in pack.derived_fields:
-        lines.append(f"  {der.id} <- {der.rule}   inputs={der.inputs}  when={der.when}  "
-                     f"evidence={der.evidence}  derivation={der.derivation!r}")
+        lines.append(f"  {der.id} <- {der.rule}   inputs={der.input_modes}  when={der.when}  "
+                     f"on_none={der.on_none}  evidence={der.evidence}  derivation={der.derivation!r}")
     lines.append(f"validation rules: {len(pack.validation)}")
     for rule in pack.validation:
         lines.append(f"  {rule.id}: {rule.rule}   on_fail={rule.on_fail}")
@@ -528,8 +565,11 @@ def describe(pack: Pack) -> str:
     lines.append(f"features on: {', '.join(on) or 'none'}  (switches: {', '.join(feats)}, self_consistency k={sc['k']})")
     lines.append(f"exemplars: {len(pack.exemplars)}"
                  + (f"  (held out of every eval: {', '.join(pack.exemplar_ids)})" if pack.exemplar_ids else ""))
+    for ex in pack.exemplars:
+        lines.append(f"  {ex.case_id or ex.source}" + (f"  variant={ex.variant} (opt-in ablation arm)" if ex.variant else ""))
     if pack.eval:
-        lines.append(f"eval: gold={pack.eval.gold}  id_column={pack.eval.id_column}  scored={pack.eval.scored}")
+        lines.append(f"eval: gold={pack.eval.gold}  id_column={pack.eval.id_column}  scored={pack.eval.scored}"
+                     + (f"  lenient={pack.eval.lenient}" if pack.eval.lenient else ""))
     return "\n".join(lines)
 
 

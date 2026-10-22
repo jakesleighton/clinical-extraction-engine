@@ -35,10 +35,27 @@ def test_prostate_merges_base(prostate):
     # vocabulary sections
     assert [r.id for r in prostate.validation] == ["gleason_sum", "grade_group_matches_gleason",
                                                    "nodes_positive_le_examined", "pN_matches_nodes"]
-    assert [d.id for d in prostate.derived_fields] == ["grade_group"]
-    assert prostate.derived_for("grade_group").derivation == "computed_from_gleason"
+    assert [d.id for d in prostate.derived_fields] == ["grade_group", "pT", "pN"]
+    gg = prostate.derived_for("grade_group")
+    assert gg.derivation == "computed_from_gleason" and gg.when == "not_stated" and gg.on_none == "flag"
+    assert gg.input_ids == ["gleason_primary", "gleason_secondary"]
+    assert gg.input_modes == {"gleason_primary": "required", "gleason_secondary": "required"}   # list form
+    pt = prostate.derived_for("pT")
+    assert pt.derivation == "computed_from_findings" and pt.when == "check" and pt.on_none == "skip"
+    assert pt.input_modes == {"specimen_procedure": "required", "extraprostatic_extension": "finding",
+                              "seminal_vesicle_invasion": "finding", "tumor_laterality": "optional"}
+    assert pt.stated_column == "pT_printed" and prostate.derived_for("pN").stated_column == "pN_printed"
+    assert prostate.derived_for("pN").derivation == "computed_from_nodes"
     assert prostate.derived_for("gleason_total") is None
     assert prostate.scored_fields == ["gleason_primary", "gleason_secondary", "gleason_total", "grade_group", "pT", "pN"]
+    assert prostate.eval.lenient == {"pT": "prefix"}
+    # exemplars: three in every prompt, the hedging arm only on request, all four held out
+    assert prostate.exemplar_ids == ["TCGA-EJ-7315", "TCGA-HC-A6AN", "TCGA-ZG-A8QW", "TCGA-V1-A9Z7"]
+    assert prostate.exemplar_variants == ["hedging"]
+    assert [ex.case_id for ex in prostate.prompt_exemplars()] == ["TCGA-EJ-7315", "TCGA-HC-A6AN", "TCGA-ZG-A8QW"]
+    assert [ex.case_id for ex in prostate.prompt_exemplars(["hedging"])][-1] == "TCGA-V1-A9Z7"
+    with pytest.raises(PackError, match="no exemplar variant \\['hedgng'\\]"):
+        prostate.prompt_exemplars(["hedgng"])
     assert prostate.reconciliation.precedence == ["prostatectomy_over_biopsy", "highest_grade_among_cores"]
     assert not prostate.features.self_consistency.enabled and prostate.features.self_consistency.k == 5
     assert prostate.root == (PACKS / "prostate_pathology").resolve()
@@ -103,6 +120,11 @@ def test_minimal_extension_loads(tmp_path):
     (lambda p: p["validation"].append({"id": "r", "rule": "a +"}), "cannot parse"),
     (lambda p: p.update({"derived_fields": [{"id": "nope", "derivation": "d", "inputs": ["a"], "rule": "a"}]}), "nope"),
     (lambda p: p.update({"derived_fields": [{"id": "b", "derivation": "d", "inputs": ["a"], "rule": "a + grade"}]}), "inputs"),
+    (lambda p: p.update({"derived_fields": [{"id": "b", "derivation": "d", "inputs": {"a": "maybe"}, "rule": "a"}]}), "optional"),
+    (lambda p: p.update({"derived_fields": [{"id": "b", "derivation": "d", "inputs": {"a": "finding"}, "rule": "a", "when": "sometimes"}]}), "check"),
+    (lambda p: p.update({"derived_fields": [{"id": "b", "derivation": "d", "inputs": ["a"], "rule": "a", "on_none": "ignore"}]}), "skip"),
+    (lambda p: p.update({"eval": {"gold": "g.csv", "scored": ["a"], "lenient": {"b": "prefix"}}}), "not in eval.scored"),
+    (lambda p: p.update({"eval": {"gold": "g.csv", "scored": ["a"], "lenient": {"a": "fuzzy"}}}), "prefix"),
     (lambda p: p.update({"eval": {"gold": "g.csv", "scored": ["a", "ghost"]}}), "ghost"),
     (lambda p: p.update({"exemplars": [{"source": "exemplars/x.txt", "output": "exemplars/x.json"}]}), "exemplar file not found"),
     (lambda p: p["pack"].update({"extends": "nonexistent"}), "nonexistent"),
@@ -179,3 +201,31 @@ def test_exemplar_case_ids_are_optional_unique_and_listed(tmp_path):
     (d / "mini" / "pack.yaml").write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
     with pytest.raises(PackError, match="duplicate case_id"):
         load_pack(d / "mini")
+
+
+def test_exemplar_variants_are_opt_in_but_always_held_out(tmp_path):
+    d = _packs_dir(tmp_path)
+    ex = d / "mini" / "exemplars"
+    ex.mkdir(parents=True)
+    for name in ("one", "two"):
+        (ex / f"{name}.txt").write_text("x", encoding="utf-8")
+        (ex / f"{name}.json").write_text("{}", encoding="utf-8")
+    body = dict(GOOD, exemplars=[
+        {"case_id": "C-1", "source": "exemplars/one.txt", "output": "exemplars/one.json"},
+        {"case_id": "C-2", "source": "exemplars/two.txt", "output": "exemplars/two.json", "variant": "hedging"},
+    ])
+    (d / "mini" / "pack.yaml").write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
+    pack = load_pack(d / "mini")
+    assert pack.exemplar_ids == ["C-1", "C-2"] and pack.exemplar_variants == ["hedging"]
+    assert [e.case_id for e in pack.prompt_exemplars()] == ["C-1"]
+    assert [e.case_id for e in pack.prompt_exemplars(("hedging",))] == ["C-1", "C-2"]
+    with pytest.raises(PackError, match="no exemplar variant"):
+        pack.prompt_exemplars(["typo"])
+    assert "variant=hedging" in describe(pack)
+    # the inputs mapping and the new keys survive a YAML round trip
+    body["derived_fields"] = [{"id": "b", "derivation": "d", "inputs": {"a": "optional"}, "rule": "a",
+                               "when": "check", "on_none": "skip"}]
+    (d / "mini" / "pack.yaml").write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
+    pack = load_pack(d / "mini")
+    again = load_merged_yaml(pack.to_yaml(), root=pack.root)
+    assert again.derived_for("b").input_modes == {"a": "optional"} and again.derived_for("b").when == "check"

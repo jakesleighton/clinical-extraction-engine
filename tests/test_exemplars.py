@@ -2,8 +2,9 @@
 verbatim in its own source, the output passes the validator with no issues,
 every field is present, a wired exemplar names its case id, and that case is
 not in the working set the eval runs on. Every (txt, json) pair in the pack's
-exemplars/ directory is checked, wired or staged (the "+hedging" ablation arm
-is staged there without being in the prompt)."""
+exemplars/ directory is checked, including the "+hedging" ablation arm, which
+is in the prompt only when a run asks for it (variant: hedging) but is held
+out of every eval regardless."""
 
 from __future__ import annotations
 
@@ -21,8 +22,10 @@ WORKING_SET = ROOT / "data" / "tcga_prad" / "working_set.txt"
 PAIRS = sorted(p.stem for p in (PACKS / "prostate_pathology" / "exemplars").glob("*.json"))
 
 
-def test_the_approved_exemplars_are_wired_and_the_hedging_arm_is_staged():
-    assert PROSTATE.exemplar_ids == ["TCGA-EJ-7315", "TCGA-HC-A6AN", "TCGA-ZG-A8QW"]
+def test_the_approved_exemplars_are_wired_and_the_hedging_arm_is_opt_in():
+    assert PROSTATE.exemplar_ids == ["TCGA-EJ-7315", "TCGA-HC-A6AN", "TCGA-ZG-A8QW", "TCGA-V1-A9Z7"]
+    assert [ex.case_id for ex in PROSTATE.prompt_exemplars()] == ["TCGA-EJ-7315", "TCGA-HC-A6AN", "TCGA-ZG-A8QW"]
+    assert [ex.case_id for ex in PROSTATE.prompt_exemplars(["hedging"])] == PROSTATE.exemplar_ids
     assert PAIRS == ["TCGA-EJ-7315", "TCGA-HC-A6AN", "TCGA-V1-A9Z7", "TCGA-ZG-A8QW"]
     for ex in PROSTATE.exemplars:
         assert ex.case_id, "every wired exemplar must name the case it came from so the eval can hold it out"
@@ -43,6 +46,9 @@ def test_exemplar_output_is_clean_against_its_source(case_id):
         else:
             assert env["evidence"], f"{fid}: a stated or negated field needs a quote"
     assert output["grade_group"]["status"] == "not_mentioned", "no TCGA-PRAD report prints a Grade Group"
+    # every exemplar prints its stage, and the engine's derivation from the findings agrees with it
+    for fid in ("pT", "pN"):
+        assert result.record[fid]["derivation"] == "stated" and result.record[fid]["value"] == output[fid]["value"]
 
 
 def test_exemplar_cases_are_outside_the_working_set():
@@ -55,6 +61,6 @@ def test_exemplar_cases_are_outside_the_working_set():
 def test_hedging_arm_demonstrates_a_hedged_finding():
     output = json.loads(PROSTATE.resolve("exemplars/TCGA-V1-A9Z7.json").read_text(encoding="utf-8"))
     assert output["margin_positive"]["hedging"] == "possible" and output["margin_positive"]["status"] == "value"
-    wired = [json.loads(PROSTATE.resolve(ex.output).read_text(encoding="utf-8")) for ex in PROSTATE.exemplars]
+    wired = [json.loads(PROSTATE.resolve(ex.output).read_text(encoding="utf-8")) for ex in PROSTATE.prompt_exemplars()]
     assert all(env["hedging"] == "definite" for out in wired for env in out.values())
     assert sum(env["conflict"] for out in wired for env in out.values()) == 1    # ZG-A8QW lymphovascular_invasion

@@ -8,10 +8,13 @@ vocabulary, derives Gleason total and (when GDC has no Grade Group) the
 Grade Group from the patterns, aligns to the staged reports, and writes:
 
 * ``packs/prostate_pathology/labels/tcga_prad_gold.csv`` — one row per case,
-  including ``grade_group_printed``: whether the staged report text literally
-  prints a Grade Group ("Grade Group 2", "ISUP 3", "GG 4"), found by regex.
-  The eval anchors its stated/derived Grade Group subsets on this column, not
-  on the model's own claim. Blank when the case has no staged report.
+  including three "printed" columns found by regex over the staged report
+  text: ``grade_group_printed`` (the report literally prints a Grade Group:
+  "Grade Group 2", "ISUP 3", "GG 4"), ``pT_printed`` and ``pN_printed`` (the
+  report prints a pathologic T / N category: "pT3a", "T2c N0", "Stage: T2";
+  the letter O stands for zero in 139+ reports). The eval anchors its
+  stated/derived subsets on these columns, never on the model's own claim.
+  Blank when the case has no staged report.
 * ``data/tcga_prad/label_mismatch_report.md`` — reports without labels,
   labels without reports, incomplete labels, raw values seen and unmapped
 
@@ -48,7 +51,8 @@ GDC_FIELDS = [
     "diagnoses.ajcc_pathologic_n",
 ]
 GOLD_COLUMNS = ["case_id", "gleason_primary", "gleason_secondary", "gleason_total", "grade_group",
-                "pT", "pN", "grade_group_source", "grade_group_printed", "complete"]
+                "pT", "pN", "grade_group_source", "grade_group_printed", "pT_printed", "pN_printed", "complete"]
+PRINTED_COLUMNS = {"grade_group_printed": "grade_group", "pT_printed": "pT", "pN_printed": "pN"}
 SCORED = ["gleason_primary", "gleason_secondary", "gleason_total", "grade_group", "pT", "pN"]
 _MISSING = {"", "not reported", "unknown", "not available", "not applicable", "--", "none"}
 
@@ -107,6 +111,36 @@ def printed_grade_group(text: str) -> str | None:
     return " ".join(m.group(0).split()) if m else None
 
 
+# A printed pathologic T category: "pT3a", "ypT2c", "PT2" (one all-caps site),
+# "T2c N0" / "T 3a NO" (a TNM string without the p), "Stage: T2" / "stage is T1".
+# "pt" in lower case is never a stage (it is the start of "pt." or a word), so
+# the p-forms are case-sensitive; the stage-word form is not.
+_PRINTED_PT = re.compile(
+    r"(?<![A-Za-z])[ymr]?[pP]T\s?[1-4]"
+    r"|\bT\s?[1-4][a-c]?\s*,?\s*p?N\s?[0-3XxOoI]"
+    r"|(?i:stage)[^.\n]{0,20}\bT\s?[1-4]")
+# A printed pathologic N category: "pN0", "pNO" / "pNo" / "pNI" (the OCR's
+# letter O and I for 0 and 1), "pNX", "N0 M0", or the N part of a TNM string
+# ("pT2c NO", "T3a, N1", "pT3bNOMX", "pT3aN1R1"); the category may run straight
+# into a following M, R, L, V or G descriptor but not into any other letter
+# ("T2c Nodes" is not a stage).
+_PRINTED_PN = re.compile(
+    r"(?<![A-Za-z])[ymr]?[pP]N\s?[0-3XxOoI](?=$|[^A-Za-z0-9]|[MmRrLlVvGg])"
+    r"|\bN\s?[0-3XxOo]\s*,?\s*p?M\s?[01xX]"
+    r"|\b[pP]?T\s?[1-4][a-c]?\s*,?\s*p?N\s?[0-3XxOoI](?=$|[^A-Za-z0-9]|[MmRrLlVvGg])")
+
+
+def printed_stage(text: str, axis: str) -> str | None:
+    """The phrase where the report prints a pathologic ``"T"`` or ``"N"``
+    category, or None. A heuristic over OCR text (see the patterns above),
+    good enough to anchor the eval's stated/derived subsets: a case the regex
+    misses lands in the "not printed" subset, which the eval reports
+    separately, never in the headline."""
+    pattern = {"T": _PRINTED_PT, "N": _PRINTED_PN}[axis]
+    m = pattern.search(text)
+    return " ".join(m.group(0).split()) if m else None
+
+
 def label_row(hit: dict[str, Any], allowed: dict[str, list[Any]]) -> tuple[dict[str, Any], list[str]]:
     """One gold row from one GDC case hit, plus notes on anything unmapped."""
     notes: list[str] = []
@@ -128,7 +162,8 @@ def label_row(hit: dict[str, Any], allowed: dict[str, list[Any]]) -> tuple[dict[
 
     row: dict[str, Any] = {"case_id": case_id, "gleason_primary": p, "gleason_secondary": s,
                            "gleason_total": total, "grade_group": gg, "pT": pt, "pN": pn,
-                           "grade_group_source": source, "grade_group_printed": None}
+                           "grade_group_source": source, "grade_group_printed": None,
+                           "pT_printed": None, "pN_printed": None}
     for col in SCORED:
         v = row[col]
         if v is not None and col in allowed and v not in allowed[col]:
@@ -164,7 +199,8 @@ def write_gold(rows: list[dict[str, Any]], path: Path) -> None:
 
 def write_mismatch_report(path: Path, rows: list[dict[str, Any]], report_ids: set[str],
                           counts: dict[str, Counter], notes: list[str],
-                          printed: dict[str, str | None] | None = None) -> None:
+                          printed: dict[str, str | None] | None = None,
+                          printed_stages: dict[str, dict[str, str | None]] | None = None) -> None:
     label_ids = {r["case_id"] for r in rows}
     both = label_ids & report_ids
     complete = {r["case_id"] for r in rows if r["complete"]}
@@ -188,6 +224,19 @@ def write_mismatch_report(path: Path, rows: list[dict[str, Any]], report_ids: se
                                                      Counter(ph.lower() for ph in hits.values()).most_common(20))
                                             or "none"),
                   "- cases (first 50): " + (", ".join(sorted(hits)[:50]) or "none")]
+    for axis, col in (("T", "pT_printed"), ("N", "pN_printed")):
+        found = {c: v.get(axis) for c, v in (printed_stages or {}).items()}
+        if not found:
+            continue
+        hits = {c: ph for c, ph in found.items() if ph}
+        missing = sorted(c for c, ph in found.items() if not ph)
+        by_site = Counter(c.split("-")[1] if c.count("-") >= 2 else "?" for c in missing)
+        lines += ["", f"## p{axis} printed in the report text (regex; gold column {col})", "",
+                  f"- reports that print one: {len(hits)} of {len(found)} staged; {len(missing)} do not",
+                  "- phrases matched (top 20): " + (", ".join(f"{ph!r}={n}" for ph, n in
+                                                              Counter(hits.values()).most_common(20)) or "none"),
+                  "- reports without one, by site: " + (", ".join(f"{s}={n}" for s, n in by_site.most_common()) or "none"),
+                  "- reports without one (first 60): " + (", ".join(missing[:60]) or "none")]
     lines += ["", "## Raw GDC values seen", ""]
     for key, counter in counts.items():
         lines.append(f"- {key}: " + ", ".join(f"{v}={n}" for v, n in counter.most_common()))
@@ -234,13 +283,17 @@ def main(argv: list[str] | None = None) -> int:
     reports_dir = Path(args.reports_dir)
     report_ids = {p.stem for p in reports_dir.glob("*.txt")} if reports_dir.exists() else set()
     printed: dict[str, str | None] = {}
+    printed_stages: dict[str, dict[str, str | None]] = {}
     for row in rows:
         if row["case_id"] in report_ids:
             text = (reports_dir / f"{row['case_id']}.txt").read_text(encoding="utf-8")
             printed[row["case_id"]] = printed_grade_group(text)
             row["grade_group_printed"] = printed[row["case_id"]] is not None
+            printed_stages[row["case_id"]] = {"T": printed_stage(text, "T"), "N": printed_stage(text, "N")}
+            row["pT_printed"] = printed_stages[row["case_id"]]["T"] is not None
+            row["pN_printed"] = printed_stages[row["case_id"]]["N"] is not None
     write_gold(rows, out)
-    write_mismatch_report(Path(args.report), rows, report_ids, raw_value_counts(hits), notes, printed)
+    write_mismatch_report(Path(args.report), rows, report_ids, raw_value_counts(hits), notes, printed, printed_stages)
     n_complete = sum(r["complete"] for r in rows)
     eligible = sum(1 for r in rows if r["complete"] and r["case_id"] in report_ids)
     print(f"gold: {len(rows)} cases ({n_complete} complete) -> {out}", file=sys.stderr)
@@ -248,6 +301,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"cases with complete labels and a staged report: {eligible}", file=sys.stderr)
     print(f"reports that print a Grade Group: {sum(1 for v in printed.values() if v)} of {len(printed)} staged",
           file=sys.stderr)
+    for axis in ("T", "N"):
+        n = sum(1 for v in printed_stages.values() if v[axis])
+        print(f"reports that print a p{axis} category: {n} of {len(printed_stages)} staged "
+              f"({len(printed_stages) - n} do not; the eval scores those as derived)", file=sys.stderr)
     print("next: python -m scripts.working_set random --n 20   (seeded smoke-test draw)", file=sys.stderr)
     print("  or: python -m scripts.working_set pick ID ...     (hand-picked cases)", file=sys.stderr)
     if not report_ids:

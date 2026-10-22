@@ -1,6 +1,6 @@
 import pytest
 
-from engine.rules import RuleError, compile_rule, grade_group_from
+from engine.rules import RuleError, compile_rule, grade_group_from, pn_from_nodes, pt_from_findings
 
 
 @pytest.mark.parametrize("p, s, expected", [
@@ -13,6 +13,37 @@ from engine.rules import RuleError, compile_rule, grade_group_from
 ])
 def test_grade_group_from(p, s, expected):
     assert grade_group_from(p, s) == expected
+
+
+@pytest.mark.parametrize("procedure, epe, svi, laterality, expected", [
+    ("radical_prostatectomy", None, "bilateral", "bilateral", "pT3b"),       # SVI wins over EPE
+    ("radical_prostatectomy", "focal", "left", None, "pT3b"),
+    ("radical_prostatectomy", "focal", None, "bilateral", "pT3a"),           # EPE without SVI
+    ("radical_prostatectomy", "present_unspecified", None, None, "pT3a"),
+    ("radical_prostatectomy", None, None, "bilateral", "pT2c"),              # organ-confined, both lobes
+    ("radical_prostatectomy", None, None, "left", "pT2"),                    # unilateral: a or b unknown
+    ("radical_prostatectomy", None, None, None, "pT2"),                      # laterality not given
+    ("needle_biopsy", None, None, "bilateral", None),                        # no pathologic stage
+    (None, None, None, None, None),
+])
+def test_pt_from_findings(procedure, epe, svi, laterality, expected):
+    assert pt_from_findings(procedure, epe, svi, laterality) == expected
+
+
+@pytest.mark.parametrize("examined, positive, expected", [
+    (12, 0, "pN0"), (7, 1, "pN1"), (1, 0, "pN0"), (5, 5, "pN1"),
+    (0, 0, None), (None, 0, None), (12, None, None), (-1, 0, None), (12, -1, None), (True, 0, None),
+])
+def test_pn_from_nodes(examined, positive, expected):
+    assert pn_from_nodes(examined, positive) == expected
+
+
+def test_stage_functions_are_whitelisted_for_packs():
+    r = compile_rule("pt_from_findings(specimen_procedure, extraprostatic_extension, seminal_vesicle_invasion, tumor_laterality)")
+    assert r.evaluate({"specimen_procedure": "radical_prostatectomy", "extraprostatic_extension": None,
+                       "seminal_vesicle_invasion": None, "tumor_laterality": "bilateral"}) == "pT2c"
+    assert compile_rule("pn_from_nodes(nodes_examined, nodes_positive)").evaluate(
+        {"nodes_examined": 3, "nodes_positive": 1}) == "pN1"
 
 
 def test_arithmetic_and_comparison():

@@ -12,6 +12,7 @@ backend's business; we hand it one string.
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from typing import Any
 
 from engine.packloader import FieldSpec, Pack
@@ -74,9 +75,11 @@ def output_format(pack: Pack) -> str:
     return "\n".join(lines)
 
 
-def exemplar_blocks(pack: Pack) -> list[str]:
+def exemplar_blocks(pack: Pack, variants: Collection[str] = ()) -> list[str]:
+    """One "## Example" block per exemplar the prompt shows: the pack's
+    untagged exemplars plus any whose ``variant`` is switched on."""
     blocks = []
-    for ex in pack.exemplars:
+    for ex in pack.prompt_exemplars(variants):
         source = pack.resolve(ex.source).read_text(encoding="utf-8").strip()
         output = json.loads(pack.resolve(ex.output).read_text(encoding="utf-8"))
         blocks.append(
@@ -87,14 +90,15 @@ def exemplar_blocks(pack: Pack) -> list[str]:
     return blocks
 
 
-def build_prompt(pack: Pack, text: str, *, include_exemplars: bool = True) -> str:
+def build_prompt(pack: Pack, text: str, *, include_exemplars: bool = True,
+                 exemplar_variants: Collection[str] = ()) -> str:
     parts = [
         pack.instructions_text,
         "## Fields to extract\n\n" + field_catalog(pack),
         "## Output format\n\n" + output_format(pack),
     ]
     if include_exemplars:
-        parts.extend(exemplar_blocks(pack))
+        parts.extend(exemplar_blocks(pack, exemplar_variants))
     parts.append(f"## Document\n\n{DOC_START}\n{text.strip()}\n{DOC_END}")
     parts.append("Return the JSON object for this document now.")
     return "\n\n".join(parts) + "\n"

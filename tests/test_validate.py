@@ -1,4 +1,6 @@
-from engine.validate import apply_derivations, find_span, normalize_date, validate_output
+import pytest
+
+from engine.validate import apply_derivations, find_span, locate, normalize_date, validate_output
 from tests.conftest import REPORT, envelope, full_record, model_output_for_report
 
 
@@ -30,6 +32,36 @@ def test_find_span_strips_quotes_and_handles_missing():
     assert find_span(REPORT, "   ") is None
 
 
+OCR = ("FINAL DIAGNOSIS. Poorly differentiated prostate. adenocarcinoma, acinar type. "
+       "Tumor measures 2.0 cm; a second nodule measures 20 cm. Extra-\nprostatic extension: present. "
+       "Lymph nodes (0/12). PSA 8,6 ng/ml. Collected 2010-10-12.")
+
+
+def test_locate_reports_which_pass_found_the_quote():
+    assert locate(REPORT, "Gleason score 3+4=7")[2] == "exact"
+    assert locate(REPORT, "gleason score 3+4=7,  involving both lobes")[2] == "whitespace"
+    start, end, how = locate(OCR, "Poorly differentiated prostate adenocarcinoma, acinar type")
+    assert how == "punctuation"
+    assert OCR[start:end] == "Poorly differentiated prostate. adenocarcinoma, acinar type"
+
+
+@pytest.mark.parametrize("quote, found", [
+    ("Poorly differentiated prostate adenocarcinoma acinar type", True),   # OCR line-break period, comma
+    ("Extraprostatic extension: present", True),                           # hyphenated line break
+    ("Lymph nodes 0/12", True),                                            # parentheses ignored, slash kept
+    ("2.0 cm; a second", True),                                            # decimal point kept and present
+    ("20 cm; a second", False),                                            # "2.0" never matches "20"
+    ("8,6 ng/ml", True),
+    ("86 ng/ml", False),                                                   # digit comma kept
+    ("Collected 2010 10 12", False),                                       # digit hyphens kept
+    ("Poorly differentiated adenocarcinoma, acinar type", False),          # a dropped word is still a miss
+    ("Poorly differentiated ... acinar type", False),                      # a stitched quote is still a miss
+    ("...", False),                                                        # nothing left to match
+])
+def test_find_span_ignores_punctuation_but_not_words_or_digit_separators(quote, found):
+    assert (find_span(OCR, quote) is not None) is found
+
+
 def test_normalize_date():
     assert normalize_date("10/15/2010") == "2010-10-15"
     assert normalize_date("2010-10-15") == "2010-10-15"
@@ -59,7 +91,8 @@ def test_good_output_has_no_issues_and_spans(prostate):
                                       "hedging": "definite", "conflict": False, "derivation": None,
                                       "evidence": [{"quote": "Surgical margins: Negative for carcinoma.",
                                                     "start": REPORT.index("Surgical margins"),
-                                                    "end": REPORT.index("Surgical margins") + len("Surgical margins: Negative for carcinoma.")}]}
+                                                    "end": REPORT.index("Surgical margins") + len("Surgical margins: Negative for carcinoma."),
+                                                    "match": "exact"}]}
     assert rec["grade_group"]["status"] == "not_mentioned" and rec["grade_group"]["derivation"] is None
     assert set(rec) == set(prostate.field_ids)
 
@@ -104,7 +137,7 @@ def test_status_value_inconsistencies(prostate):
     assert not result.ok and [i.code for i in result.errors] == ["missing_value"]
     rec = result.record
     assert rec["gleason_secondary"]["value"] is None
-    assert rec["nodes_examined"]["evidence"] == [{"quote": "ninety-nine nodes", "start": None, "end": None}]
+    assert rec["nodes_examined"]["evidence"] == [{"quote": "ninety-nine nodes", "start": None, "end": None, "match": None}]
     assert rec["report_date"]["value"] == "last Tuesday"
     assert rec["tumor_dimension"]["value"] == 1.5 and rec["tumor_dimension"]["unit"] is None
 
@@ -186,3 +219,81 @@ def test_derivation_outside_allowed_is_flagged(prostate):
     apply_derivations(pack, result.record, result.issues)
     assert _codes(result) == ["derivation_failed"]
     assert result.record["grade_group"]["status"] == "not_mentioned"
+
+
+# ---------------------------------------------------------------------------
+# derived pT / pN: input modes, `when: check`, `on_none: skip`
+# ---------------------------------------------------------------------------
+
+def _derive(pack, overrides):
+    """Validate REPORT output with some envelopes replaced, run the derivations,
+    return (record, issue codes)."""
+    output = model_output_for_report(pack)
+    output.update(overrides)
+    result = validate_output(pack, output, REPORT)
+    apply_derivations(pack, result.record, result.issues)
+    return result.record, _codes(result)
+
+
+def test_printed_stage_that_agrees_with_the_findings_stays_stated(prostate):
+    record, codes = _derive(prostate, {})
+    assert codes == []
+    assert (record["pT"]["value"], record["pT"]["derivation"]) == ("pT2c", "stated")
+    assert (record["pN"]["value"], record["pN"]["derivation"]) == ("pN0", "stated")
+    assert record["pT"]["evidence"] == [{"quote": "Pathologic stage: pT2c pN0.", "start": REPORT.index("Pathologic"),
+                                         "end": REPORT.index("pN0.") + 4, "match": "exact"}]
+
+
+def test_unprinted_stage_is_derived_from_findings_and_nodes_with_inherited_evidence(prostate):
+    record, codes = _derive(prostate, {"pT": envelope(), "pN": envelope()})
+    assert codes == []
+    pt, pn = record["pT"], record["pN"]
+    assert (pt["status"], pt["value"], pt["derivation"]) == ("value", "pT2c", "computed_from_findings")
+    assert (pn["status"], pn["value"], pn["derivation"]) == ("value", "pN0", "computed_from_nodes")
+    # the evidence is the contributing inputs' quotes, the negated findings included
+    assert [e["quote"] for e in pt["evidence"]] == ["radical prostatectomy", "Extraprostatic extension: Not identified.",
+                                                     "Seminal vesicle invasion: Negative.", "involving both lobes"]
+    assert [e["quote"] for e in pn["evidence"]] == ["Twelve lymph nodes", "(0/12)"]
+    assert all(e["start"] is not None and e["match"] == "exact" for e in pt["evidence"] + pn["evidence"])
+    assert pt["hedging"] == "definite" and pt["conflict"] is False
+
+
+def test_seminal_vesicle_invasion_gives_pt3b_and_a_disagreement_is_flagged_not_overwritten(prostate):
+    svi = envelope("value", "bilateral", ["Seminal vesicle invasion"], hedging="probable")
+    record, codes = _derive(prostate, {"pT": envelope(), "seminal_vesicle_invasion": svi})
+    assert codes == [] and record["pT"]["value"] == "pT3b"
+    assert record["pT"]["hedging"] == "probable"                                      # weakest input hedging
+    # a printed pT2c against findings that say pT3b: the stated value stands, the disagreement is flagged
+    record, codes = _derive(prostate, {"seminal_vesicle_invasion": svi})
+    assert "derivation_disagrees" in codes
+    assert (record["pT"]["value"], record["pT"]["derivation"]) == ("pT2c", "stated")
+
+
+def test_coarser_printed_stage_agrees_with_the_computed_one(prostate):
+    epe = envelope("value", "focal", ["Extraprostatic extension"])
+    pt = envelope("value", "pT3", ["Pathologic stage"])
+    record, codes = _derive(prostate, {"extraprostatic_extension": epe, "pT": pt})
+    assert "derivation_disagrees" not in codes
+    assert (record["pT"]["value"], record["pT"]["derivation"]) == ("pT3", "stated")
+
+
+def test_silent_finding_blocks_the_derivation_and_optional_laterality_does_not(prostate):
+    record, codes = _derive(prostate, {"pT": envelope(), "extraprostatic_extension": envelope()})
+    assert codes == [] and record["pT"]["status"] == "not_mentioned" and record["pT"]["derivation"] is None
+    record, codes = _derive(prostate, {"pT": envelope(), "tumor_laterality": envelope()})
+    assert codes == [] and (record["pT"]["value"], record["pT"]["derivation"]) == ("pT2", "computed_from_findings")
+
+
+def test_on_none_skip_leaves_the_field_without_a_flag(prostate):
+    biopsy = envelope("value", "needle_biopsy", ["radical prostatectomy"])
+    record, codes = _derive(prostate, {"pT": envelope(), "specimen_procedure": biopsy})
+    assert codes == [] and record["pT"]["status"] == "not_mentioned"
+    no_nodes = envelope("explicitly_absent", None, ["Twelve lymph nodes"])
+    record, codes = _derive(prostate, {"pN": envelope(), "nodes_examined": no_nodes, "nodes_positive": envelope()})
+    assert codes == [] and record["pN"]["status"] == "not_mentioned"
+    # under the strict default (on_none: flag) the same None is a derivation_failed flag
+    strict = prostate.model_copy(deep=True)
+    strict.derived_for("pN").on_none = "flag"
+    zero = envelope("value", 0, ["Twelve lymph nodes"])
+    record, codes = _derive(strict, {"pN": envelope(), "nodes_examined": zero})
+    assert "derivation_failed" in codes and record["pN"]["status"] == "not_mentioned"

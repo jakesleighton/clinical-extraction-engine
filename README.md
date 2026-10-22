@@ -8,9 +8,11 @@ Built and benchmarked on public data (TCGA pathology reports). Adapting it to
 a new document type is a configuration folder (a **task pack**), not new
 code.
 
-**Status: Phase 0 complete (scaffold, staged data, one smoke run).** Nothing
-here has produced a number yet. Phase 1 adds the first per-field F1 results
-on TCGA-PRAD.
+**Status: Phase 1 in progress.** Phase 0 (scaffold, staged data, smoke run)
+is complete; the five-model baseline on the 24-case working set and the
+scoring machinery it asked for are in `docs/BUILD_LOG.md` (entries 1.2 to
+1.6). Next: the re-baseline of the carried models with the new machinery,
+then the hedging-exemplar ablation arm.
 
 ## Why it looks the way it does
 
@@ -103,12 +105,20 @@ python -m engine.packloader packs/prostate_pathology   # show the merged pack (-
 python -m engine.extract data/tcga_prad/reports/<case_id>.txt \
     --pack packs/prostate_pathology --model qwen2.5:7b
 
-# the Phase 1 loop: the working set, scored (--cases ID ... runs specific cases instead)
+# the Phase 1 loop: the working set, scored (--cases ID ... runs specific cases instead).
+# --groups splits the report by case group (random-20 vs weird-5); --gold-notes also scores
+# without the audited gold cases; --exemplar-variant hedging switches on the opt-in exemplar arm
 python -m evalharness.runner --pack packs/prostate_pathology --model qwen2.5:7b \
-    --reports data/tcga_prad/reports --ids data/tcga_prad/working_set.txt
+    --reports data/tcga_prad/reports --ids data/tcga_prad/working_set.txt \
+    --groups data/tcga_prad/case_groups.csv --gold-notes data/gold_notes.md
 # thinking models (Qwen 3.5, Gemma 4) run with thinking off (--think false is the default);
-# gpt-oss only takes a level, so pass --think low. With exemplars in the prompt the context
-# window defaults to 16384 tokens (--num-ctx overrides); without them it stays at 8192.
+# gpt-oss only takes a level, so pass --think low. The context window is sized from the prompt
+# (16384 tokens with the three exemplars, 20480 with the hedging arm; --num-ctx overrides).
+
+# re-score a finished run with the current pack and engine, no model calls (the ledger keeps
+# every reply verbatim): how a matcher or scoring change moves the numbers
+python -m evalharness.rescore --run-id <run_id> --pack packs/prostate_pathology \
+    --reports data/tcga_prad/reports --groups data/tcga_prad/case_groups.csv --gold-notes data/gold_notes.md
 ```
 
 `OLLAMA_HOST` points the Ollama backend somewhere other than
@@ -124,10 +134,11 @@ packs/
   prostate_pathology/
     pack.yaml                     extends: base. Fields, enums, cross-field rules,
                                   derived fields, precedence, eval spec
-    exemplars/                    (document, expected JSON) pairs shown in the prompt: three wired,
-                                  one staged for a hedging ablation; their case ids are held
-                                  out of every eval run
-    labels/tcga_prad_gold.csv     gold labels for the scored fields
+    exemplars/                    (document, expected JSON) pairs shown in the prompt: three always,
+                                  a fourth (variant: hedging) only when a run asks for it; all four
+                                  case ids are held out of every eval run
+    labels/tcga_prad_gold.csv     gold labels for the scored fields, plus columns saying whether
+                                  the report text prints a Grade Group, a pT and a pN
 ```
 
 A field is a few lines of YAML:
@@ -149,10 +160,17 @@ finds the text before it commits to a value:
 ```
 
 The engine then adds what the model must never do: character offsets for
-each quote, cross-field checks (`gleason_primary + gleason_secondary ==
-gleason_total`), and **derived fields** computed deterministically from
-extracted values (Grade Group from the Gleason patterns), each stamped with
-its provenance (`derivation: stated | computed_from_gleason`).
+each quote (located exactly, or with whitespace, case, punctuation and
+line-break differences ignored; the record says which), cross-field checks
+(`gleason_primary + gleason_secondary == gleason_total`), and **derived
+fields** computed deterministically from extracted values, each stamped with
+its provenance: Grade Group from the Gleason patterns (`derivation: stated |
+computed_from_gleason`), and, for the reports that print no stage line, pT
+from the extent findings of a radical prostatectomy and pN from the node
+counts (`computed_from_findings`, `computed_from_nodes`). A printed stage
+always stands; when the findings disagree with it the record is flagged. The
+eval scores stated and derived cases separately, anchored on gold columns
+that say whether the text prints the value, never on the model's own claim.
 
 Rules are plain expressions evaluated by a small whitelisting interpreter
 (`engine/rules.py`), never `eval()`: packs are data, and public packs will be
@@ -163,14 +181,17 @@ written by other people.
 ```
 packs/            task packs (base + prostate_pathology)
 engine/           packloader, schema, prompt_builder, llm (+ backends/), validate, extract, ledger, rules
-evalharness/      metrics (per-field P/R/F1 by tier), runner (end-to-end eval of a pack)
+evalharness/      metrics (per-field P/R/F1 by tier, lenient rows), report (group split, audited-gold
+                  exclusion, validator flags, quote classes, cost), runner (end-to-end eval of a pack),
+                  rescore (re-validate a saved run with the current pack, no model calls)
 adapters/         jsonl (real); sql_tables, feature_matrix (Aim 3 stubs)
 scripts/          fetch_tcga_reports, join_gold_labels (data staging), working_set (which cases to run),
                   weirdness_screen (ranks reports by cheap trouble heuristics, no model calls)
 containers/       Dockerfile (local), singularity.def (HPC batch)
 tests/            pytest suite; the model server is mocked
 data/, runs/      gitignored: staged reports and run ledgers never enter the repo
-                  (exceptions: data/weird_cases.md and data/tcga_prad/working_set.txt, public case ids)
+                  (exceptions, all public case ids and TCGA text: data/weird_cases.md, data/gold_notes.md,
+                  data/tcga_prad/working_set.txt, data/tcga_prad/case_groups.csv)
 notes/            gitignored: local working notes and project-internal documents
 ```
 
@@ -179,7 +200,7 @@ notes/            gitignored: local working notes and project-internal documents
 | Phase | What lands |
 |---|---|
 | 0 | pack format, repo skeleton, `complete()` + Ollama, TCGA-PRAD staged (446 reports, gold labels for 423), a 24-case working set: a seeded draw of 20 plus five hand-picked hard cases (`data/weird_cases.md`) |
-| 1 | extraction core on the prostate pack; first per-field F1 on the scored core (Gleason primary/secondary/total, Grade Group, pT, pN) |
+| 1 | extraction core on the prostate pack; first per-field F1 on the scored core (Gleason primary/secondary/total, Grade Group, pT, pN); five-model baseline on the working set, then the scoring machinery that baseline asked for (derived stage with provenance, lenient stage column, gold audit list, punctuation-tolerant matcher, fuller reports) and the hedging-exemplar ablation |
 | 2 | agentic features one at a time, each with its ablation number: evidence verification, validator-feedback retry, self-consistency confidence, verifier agent, case reconciliation |
 | 3 | second public pack (structurally different) as the generality proof |
 | 4 | commercial-model benchmark sweep on public data; OCR path on scanned PDFs |

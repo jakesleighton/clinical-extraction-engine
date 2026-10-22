@@ -262,3 +262,147 @@ Checked: the analysis is computed from the saved predictions and ledgers by
 two scripts kept outside the repository until the baseline is closed (they
 move into `evalharness` as part of the next entry); the long-form report
 lives in the local notes folder. Test suite unchanged at 146.
+
+### 1.3 Evidence matcher: punctuation and line breaks (2026-10-22)
+
+What: the quote locator in `engine/validate.py` gained a third pass. A
+quote is looked for exactly, then with whitespace and case folded (the
+Phase 0 behaviour), then with punctuation and line-break characters ignored
+as well; a `.`, `,` or `-` between two digits is kept, so `2.0` never
+matches `20` and `8,6` never matches `86`. Offsets always land on the real
+span of the source text. Each evidence entry now records which pass found
+it (`match: exact | whitespace | punctuation`, null when not found), so a
+report can say how clean a model's quoting is rather than only whether it
+failed.
+
+Why: the baseline (entry 1.2) traced most evidence flags to one corpus
+artefact, a period inserted at every original line break by the OCR, which
+models quote without. That is a measurement error, not a model error. The
+settled fuzzy-matching policy (whitespace and case only; a dropped word is a
+miss; the retry loop asks for exact quotes) is kept and narrowly amended:
+punctuation tolerance only. Dropped or inserted words still miss, and are
+what the Phase 2 retry loop is for. Recorded in the decision log.
+
+Checked: eleven locator cases including the digit-separator rules, a
+stitched quote and a dropped word (both still misses). Re-scoring the five
+saved baseline runs with the new locator (entry 1.4 explains how) moved
+qwen3.5:9b from 86 evidence flags to 21, gpt-oss:20b from 29 to 16,
+qwen3.5:27b from 42 to 7, qwen2.5:7b from 42 to 21 and gemma4 from 11 to
+8; what remains is stitched, one-word-off, partial or invented quotes, the
+retry loop's job.
+
+### 1.4 Reports that carry their own analysis, and offline re-scoring (2026-10-22)
+
+What: `evalharness/report.py` computes everything the baseline write-up had
+to compute outside the repository, from the saved records and the ledger:
+the group split (a tracked `case_id,group` file, `data/tcga_prad/case_groups.csv`,
+holds the random-20 and weird-5 memberships; one case is in both), scores
+without the audited gold cases, validator flag counts by code with the
+fields they touched, a per-field table of status, derived, hedged and
+conflict counts (the only view of the hard tier, which has no gold), which
+locator pass found each quote, a class for every quote no pass found
+(normalized, stitched, one_token, partial, other), and a cost table from the
+ledger (tokens, latency, wall, think and done_reason, context pressure). The
+runner takes `--groups` and `--gold-notes` and writes all of it into
+`report.md` and `metrics.json`.
+
+`evalharness/rescore.py` re-validates a finished run from its ledger with the
+current pack and engine, without a model call, into a new run folder marked
+"RE-SCORED". The ledger keeps every reply verbatim, so any change to the
+scoring machinery can be shown on finished runs before model time is spent.
+It is also how the numbers in entries 1.3 and 1.5 were produced.
+
+Why: the step-2 analysis scripts lived outside the repository by design (a
+baseline is frozen); once the baseline closed, the analysis belongs in the
+tool so the full sweep needs nothing else. A report that can be rebuilt
+from the ledger is also the provenance claim made concrete.
+
+Checked: unit tests for each table, an end-to-end runner test with groups,
+gold notes and the opt-in exemplar arm on the mocked server, and a rescore
+test that reproduces a mocked run's scores from its ledger.
+
+### 1.5 Derived pT and pN with provenance, lenient stage column, gold audit list (2026-10-22)
+
+What: the Grade Group mechanism now covers the stage. The prostate pack
+(version 3) declares `pT` as derived from the extent findings of a radical
+prostatectomy (seminal vesicle invasion gives pT3b, extraprostatic
+extension pT3a, neither is organ-confined: pT2c when bilateral, otherwise
+pT2) and `pN` from the node counts, with provenance labels
+`computed_from_findings` and `computed_from_nodes`; two functions in the
+whitelisted rule library, no stage logic in engine code. The field
+instructions now say that only a printed stage counts and that the engine
+derives the rest. Three pack-level mechanisms were added to make that
+expressible: input modes (`required`, `finding`: an explicitly absent
+finding is information and is passed as absent while silence blocks the
+derivation, `optional`), `when: check` (a printed value stands; a
+disagreement with the findings is flagged as `derivation_disagrees`, a
+coarser printed form such as pT3 against pT3a counts as agreement), and
+`on_none: skip` (a rule that cannot pin a value, a biopsy or no nodes, is
+not a failure). Inherited evidence carries the negated findings' quotes.
+
+The gold CSV gained `pT_printed` and `pN_printed` (regex over the report
+text, letter O read as zero; 89 of 446 staged reports print no T category,
+117 no N category, almost all in two report templates), and the eval
+scores each stage field on `all`, `stated` and the derived subset,
+gold-anchored as for Grade Group, with the false-provenance note: a model
+that writes a stage where none is printed is now visible as a false
+"stated" claim.
+
+`eval.lenient: {pT: prefix}` adds one labelled row per lenient field (a
+printed pT3 scores against gold pT3a, either way round) and "(lenient)"
+aggregates; exact match stays the headline.
+
+`data/gold_notes.md` (tracked) lists the seven working-set cases whose gold
+the report text does not support, with the quoted text, each quote checked
+by the locator: three where the text says otherwise, one stale correction,
+two where the gold is finer than the text, and the amendment-rule case
+(TCGA-CH-5741), where the gold is right and the base pack's rule, kept as
+written, gives the other value. The runner scores with and without these
+cases as whole cases.
+
+Why: entry 1.2's decisions 2, 4 and 5. The "as written" policy forfeits
+about a fifth of the corpus on two fields; letting the model infer a stage
+is the failure mode qwen2.5:7b demonstrated. Deriving with provenance keeps
+the model honest and the number readable.
+
+Checked: 212 tests. Re-scoring the saved baseline replies with the new
+machinery (model outputs unchanged, so a measurement of the scoring, not of
+the models): overall micro-F1 qwen3.5:9b 88 to 91 (92 lenient), gpt-oss:20b
+87 to 90 (92), gemma4 85 to 87 (89), qwen3.5:27b 87 to 90 (92), qwen2.5:7b
+unchanged at 90; on the five no-stage KK reports the engine derived pT for
+5 of 5 cases from qwen3.5:9b's and gpt-oss's findings and 3 of 5 from
+gemma4's, all correct; without the seven audited cases the three carried
+models score 95 to 99. `derivation_disagrees` fired on the amended report
+(the follow-up's pT3a/pN0 against the described pT3b/pN1 findings) and on
+the report with two different printed stages, which is the flag doing its
+job. The amendment-rule question is closed as "keep, record the
+counter-example" (decision 3).
+
+### 1.6 Hedging exemplar as an opt-in arm; context sized from the prompt (2026-10-22)
+
+What: exemplars can carry a `variant` name. The prompt always shows the
+untagged exemplars; `--exemplar-variant hedging` (runner and single-document
+CLI) adds the tagged ones, and every exemplar case, tagged or not, is held
+out of every eval, so an arm and its baseline score the same cases. The
+staged fourth exemplar (TCGA-V1-A9Z7, a genuinely hedged margin) is now
+wired that way. The ledger's validation line records the exemplar cases in
+the prompt and the variants that were on.
+
+The context window is now sized from the prompt instead of a constant
+(about a token per three characters plus 4096 of headroom, rounded up to a
+2048 step, never below the backend's 8192): the three-exemplar prompt still
+gets 16384, so the re-baseline is comparable with entry 1.2, and the
+four-exemplar prompt gets 20480, which the old constant would have
+truncated from the front. `--num-ctx` still overrides, and the value used
+is on every ledger line.
+
+Why: entry 1.2's decision 6: two models never hedged and three of five
+called the deliberately hedged margin definite, the condition the staged
+exemplar was reserved for. An ablation arm must differ from its baseline in
+exactly one thing, hence the variant switch rather than a second pack.
+
+Checked: prompt tests count three and four "## Example" blocks, the
+hold-out test covers the tagged case, the exemplar test validates all four
+pairs against the current pack (every stage derivation agrees with the
+printed stage). Test suite: 212, 0 skipped.
+

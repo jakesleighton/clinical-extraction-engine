@@ -49,8 +49,47 @@ def grade_group_from(primary: int, secondary: int) -> int | None:
     return 5
 
 
+def pt_from_findings(procedure: str | None, extraprostatic_extension: Any, seminal_vesicle_invasion: Any,
+                     laterality: str | None = None) -> str | None:
+    """Pathologic T category of a radical prostatectomy from the extent
+    findings (AJCC 7th edition, the system the TCGA gold uses).
+
+    A finding argument is its extracted value when present and ``None`` when
+    the report says it is absent (the engine passes ``None`` for
+    ``explicitly_absent``; a finding the report never mentions blocks the
+    derivation before this runs). Seminal vesicle invasion -> pT3b;
+    extraprostatic extension without it -> pT3a; neither -> organ-confined:
+    pT2c when the tumor is bilateral, otherwise pT2 (the findings cannot
+    separate pT2a from pT2b). ``None`` for any other procedure (a biopsy has
+    no pathologic stage), and never pT4, which needs the adjacent-organ
+    findings the pack does not extract.
+    """
+    if procedure != "radical_prostatectomy":
+        return None
+    if seminal_vesicle_invasion is not None:
+        return "pT3b"
+    if extraprostatic_extension is not None:
+        return "pT3a"
+    return "pT2c" if laterality == "bilateral" else "pT2"
+
+
+def pn_from_nodes(nodes_examined: Any, nodes_positive: Any) -> str | None:
+    """pN1 when any examined regional node carries metastasis, pN0 when at
+    least one node was examined and none does, ``None`` when no node was
+    examined (no nodes, no pathologic N)."""
+    if isinstance(nodes_examined, bool) or isinstance(nodes_positive, bool):
+        return None
+    if not isinstance(nodes_examined, int) or not isinstance(nodes_positive, int):
+        return None
+    if nodes_examined < 1 or nodes_positive < 0:
+        return None
+    return "pN1" if nodes_positive > 0 else "pN0"
+
+
 FUNCTIONS: dict[str, Any] = {
     "grade_group_from": grade_group_from,
+    "pt_from_findings": pt_from_findings,
+    "pn_from_nodes": pn_from_nodes,
     "abs": abs,
     "min": min,
     "max": max,

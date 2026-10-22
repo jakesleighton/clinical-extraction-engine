@@ -71,7 +71,7 @@ def test_compute_metrics_tiers_subsets_and_notes(prostate):
 
     preds = {
         "c1": rec(3, 4, 7, 2, "computed_from_gleason", "pT2c", "pN0"),   # all right; GG derived
-        "c2": rec(4, 3, 7, 2, "stated", "pT3a", "pN0"),                  # GG wrong (stated), pN wrong
+        "c2": rec(4, 3, 7, 2, "stated", "pT3", "pN0"),                   # GG wrong (stated), pT coarser, pN wrong
         "c3": rec(3, 3, None, 1, "computed_from_gleason", "pT2", None),  # total missing; pN unscored
     }
     report = compute_metrics(prostate, preds, gold)
@@ -80,12 +80,16 @@ def test_compute_metrics_tiers_subsets_and_notes(prostate):
     assert [(s.field, s.subset) for s in report.fields] == [
         ("gleason_primary", "all"), ("gleason_secondary", "all"), ("gleason_total", "all"),
         ("grade_group", "all"), ("grade_group", "stated"), ("grade_group", "computed_from_gleason"),
-        ("pT", "all"), ("pN", "all")]
+        ("pT", "all"), ("pT", "stated"), ("pT", "computed_from_findings"), ("pT", "lenient_prefix"),
+        ("pN", "all"), ("pN", "stated"), ("pN", "computed_from_nodes")]
     assert (by["gleason_primary", "all"].tp, by["gleason_primary", "all"].n) == (3, 3)
     assert (by["gleason_total", "all"].tp, by["gleason_total", "all"].fn) == (2, 1)
     assert (by["grade_group", "all"].tp, by["grade_group", "all"].fp, by["grade_group", "all"].fn) == (2, 1, 1)
     assert (by["grade_group", "stated"].n, by["grade_group", "stated"].tp) == (1, 0)
     assert (by["grade_group", "computed_from_gleason"].n, by["grade_group", "computed_from_gleason"].tp) == (2, 2)
+    assert (by["pT", "all"].n, by["pT", "all"].tp, by["pT", "all"].fp, by["pT", "all"].fn) == (3, 2, 1, 1)
+    assert (by["pT", "lenient_prefix"].n, by["pT", "lenient_prefix"].tp) == (3, 3)     # pT3 counts for pT3a
+    assert (by["pT", "stated"].n, by["pT", "computed_from_findings"].n) == (3, 0)      # no gold column: model label
     assert (by["pN", "all"].n, by["pN", "all"].tp, by["pN", "all"].fp) == (2, 1, 1)
     assert by["pT", "all"].tier == "deterministic" and by["gleason_primary", "all"].tier == "standard"
 
@@ -93,50 +97,69 @@ def test_compute_metrics_tiers_subsets_and_notes(prostate):
     assert set(tiers) == {"deterministic", "standard"}
     assert [f.field for f in tiers["deterministic"].fields] == ["pT", "pN"]
     det = tiers["deterministic"]
-    assert (det.tp, det.fp, det.fn) == (4, 1, 1)
-    assert det.micro_precision == pytest.approx(0.8) and det.micro_recall == pytest.approx(0.8)
-    assert det.micro_f1 == pytest.approx(0.8)
-    assert det.macro_f1 == pytest.approx((1.0 + 0.5) / 2)
-    # only the `all` rows feed the aggregates
+    assert (det.tp, det.fp, det.fn) == (3, 2, 2)
+    assert det.micro_precision == pytest.approx(0.6) and det.micro_recall == pytest.approx(0.6)
+    assert det.micro_f1 == pytest.approx(0.6)
+    assert det.macro_f1 == pytest.approx((2 / 3 + 0.5) / 2)
+    # only the `all` rows feed the aggregates; the lenient aggregates swap the lenient row in
     assert [f.field for f in report.overall.fields] == ["gleason_primary", "gleason_secondary", "gleason_total",
                                                         "grade_group", "pT", "pN"]
+    assert (report.overall.tp, report.overall.fp, report.overall.fn) == (13, 3, 4)
+    assert [a.name for a in report.lenient] == ["deterministic (lenient)", "overall (lenient)"]
+    assert (report.aggregate("deterministic (lenient)").tp, report.aggregate("deterministic (lenient)").fp) == (4, 1)
+    assert report.aggregate("deterministic (lenient)").micro_f1 == pytest.approx(0.8)
+    assert (report.aggregate("overall (lenient)").tp, report.aggregate("overall (lenient)").fp,
+            report.aggregate("overall (lenient)").fn) == (14, 2, 3)
+    assert report.aggregate("nothing") is None
     assert report.n_cases == 3 and report.n_missing_predictions == 0
     assert any("counted twice" in n for n in report.notes)
     assert any("derivation label" in n for n in report.notes)
+    assert any("lenient_prefix" in n and "headline" in n for n in report.notes)
 
     md = report.to_markdown()
     assert "| grade_group | stated |" in md and "| deterministic |" in md and "Notes:" in md
+    assert "| pT | lenient_prefix | deterministic | 3 | 3 |" in md and "| overall (lenient) |" in md
     d = report.to_dict()
     assert d["overall"]["tp"] == report.overall.tp and math.isclose(d["fields"][0]["f1"], 1.0)
+    assert [a["name"] for a in d["lenient"]] == ["deterministic (lenient)", "overall (lenient)"]
+
+
+def test_lenient_match():
+    from evalharness.metrics import lenient_match
+    assert lenient_match("prefix", "pT3", "pT3a") and lenient_match("prefix", "pT3a", "pT3")
+    assert lenient_match("prefix", " PT2C ", "pT2c") and not lenient_match("prefix", "pT3a", "pT3b")
+    assert not lenient_match("prefix", "pT2", "pT3") and not lenient_match("prefix", 3, "3a")
+    assert lenient_match("prefix", 3, "3.0") and not lenient_match("other", "pT3", "pT3a")
 
 
 def test_load_gold_rejects_values_outside_vocabulary(prostate, tmp_path):
+    head = "case_id,gleason_primary,gleason_secondary,gleason_total,grade_group,pT,pN,grade_group_printed,pT_printed,pN_printed"
     good = tmp_path / "good.csv"
-    good.write_text("case_id,gleason_primary,gleason_secondary,gleason_total,grade_group,pT,pN,grade_group_printed,extra\n"
-                    "A,3,4,7,2,pT2c,pN0,True,ignored\n"
-                    "B,,,,,pT3a,,,\n", encoding="utf-8")
+    good.write_text(f"{head},extra\n"
+                    "A,3,4,7,2,pT2c,pN0,True,True,False,ignored\n"
+                    "B,,,,,pT3a,,,,,\n", encoding="utf-8")
     gold = load_gold(prostate, good)
     assert gold == {"A": {"gleason_primary": 3, "gleason_secondary": 4, "gleason_total": 7, "grade_group": 2,
-                          "pT": "pT2c", "pN": "pN0", "grade_group_printed": True},
+                          "pT": "pT2c", "pN": "pN0", "grade_group_printed": True, "pT_printed": True,
+                          "pN_printed": False},
                     "B": {"gleason_primary": None, "gleason_secondary": None, "gleason_total": None,
-                          "grade_group": None, "pT": "pT3a", "pN": None, "grade_group_printed": None}}
+                          "grade_group": None, "pT": "pT3a", "pN": None, "grade_group_printed": None,
+                          "pT_printed": None, "pN_printed": None}}
 
     bad = tmp_path / "bad.csv"
-    bad.write_text("case_id,gleason_primary,gleason_secondary,gleason_total,grade_group,pT,pN,grade_group_printed\n"
-                   "A,3,4,7,2,T2c,N0,False\n", encoding="utf-8")
+    bad.write_text(f"{head}\nA,3,4,7,2,T2c,N0,False,True,True\n", encoding="utf-8")
     with pytest.raises(PackError, match="T2c"):
         load_gold(prostate, bad)
 
     badbool = tmp_path / "badbool.csv"
-    badbool.write_text("case_id,gleason_primary,gleason_secondary,gleason_total,grade_group,pT,pN,grade_group_printed\n"
-                       "A,3,4,7,2,pT2c,pN0,maybe\n", encoding="utf-8")
+    badbool.write_text(f"{head}\nA,3,4,7,2,pT2c,pN0,maybe,True,True\n", encoding="utf-8")
     with pytest.raises(PackError, match="true/false/blank"):
         load_gold(prostate, badbool)
 
     nocol = tmp_path / "nocol.csv"
-    nocol.write_text("case_id,gleason_primary,gleason_secondary,gleason_total,grade_group,pT,pN\n"
-                     "A,3,4,7,2,pT2c,pN0\n", encoding="utf-8")
-    with pytest.raises(PackError, match="grade_group_printed"):
+    nocol.write_text("case_id,gleason_primary,gleason_secondary,gleason_total,grade_group,pT,pN,grade_group_printed\n"
+                     "A,3,4,7,2,pT2c,pN0,True\n", encoding="utf-8")
+    with pytest.raises(PackError, match="pT_printed"):
         load_gold(prostate, nocol)
 
     short = tmp_path / "short.csv"
