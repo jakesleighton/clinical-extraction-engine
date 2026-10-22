@@ -244,7 +244,16 @@ def quote_summary(records: list[dict[str, Any]], texts: dict[str, str]) -> dict[
 # ---------------------------------------------------------------------------
 
 
+# Above this share of the context window the largest call is one longer report
+# or thinking trace away from being cut off, which Ollama does without an error.
+CONTEXT_PRESSURE_LIMIT = 0.9
+
+
 def cost_summary(calls: list[dict[str, Any]], wall_s: float | None = None) -> dict[str, Any]:
+    """Token, latency and window figures from the run's ``llm_call`` lines.
+    ``context_pressure`` is the largest call's tokens (prompt plus output) over
+    ``num_ctx``; ``context_pressure_high`` says it passed
+    ``CONTEXT_PRESSURE_LIMIT``, and the report then carries a warning."""
     lat = [c["latency_s"] for c in calls if isinstance(c.get("latency_s"), (int, float))]
     tin = [c["tokens_in"] for c in calls if isinstance(c.get("tokens_in"), int)]
     tout = [c["tokens_out"] for c in calls if isinstance(c.get("tokens_out"), int)]
@@ -257,6 +266,7 @@ def cost_summary(calls: list[dict[str, Any]], wall_s: float | None = None) -> di
     params = dict(calls[0].get("params") or {}) if calls else {}
     num_ctx = params.get("num_ctx")
     peak = max((c.get("tokens_in") or 0) + (c.get("tokens_out") or 0) for c in calls) if calls else None
+    pressure = peak / num_ctx if peak and num_ctx else None
     return {"calls": len(calls), "errors": sum(1 for c in calls if c.get("error")),
             "tokens_in": sum(tin), "tokens_in_mean": round(statistics.mean(tin)) if tin else None,
             "tokens_out": sum(tout), "tokens_out_mean": round(statistics.mean(tout)) if tout else None,
@@ -266,7 +276,18 @@ def cost_summary(calls: list[dict[str, Any]], wall_s: float | None = None) -> di
             "wall_s": None if wall_s is None else round(wall_s),
             "think": dict(think), "done_reason": dict(done), "params": params,
             "num_ctx": num_ctx, "peak_tokens": peak,
-            "context_pressure": (round(peak / num_ctx, 2) if peak and num_ctx else None)}
+            "context_pressure": (round(pressure, 2) if pressure is not None else None),
+            "context_pressure_high": (pressure is not None and pressure > CONTEXT_PRESSURE_LIMIT)}
+
+
+def context_warning(cost: dict[str, Any]) -> str | None:
+    """The note a report carries when the largest call passed the limit."""
+    if not cost.get("context_pressure_high"):
+        return None
+    return (f"context pressure: the largest call used {cost['peak_tokens']:,} of {cost['num_ctx']:,} tokens "
+            f"({100 * cost['peak_tokens'] / cost['num_ctx']:.1f}% of the window, above {pct(CONTEXT_PRESSURE_LIMIT, 0)}%). A reply or "
+            f"thinking trace that outgrows the window is cut off or shifted without an error: raise --num-ctx, or "
+            f"let the auto-sizer reserve its think-aware headroom (4096 tokens with thinking off, 8192 on).")
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +307,7 @@ class RunReport:
     status: list[dict[str, Any]] = field(default_factory=list)
     quotes: dict[str, Any] = field(default_factory=dict)
     cost: dict[str, Any] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)       # e.g. context pressure; rendered under Notes
 
     # the fields older callers read straight off the metrics
     @property
@@ -301,7 +323,8 @@ class RunReport:
                 "groups": {g: m.to_dict() for g, m in self.groups.items()},
                 "without_audited": self.without_audited.to_dict() if self.without_audited else None,
                 "audited_in_run": self.audited_in_run,
-                "validator": self.flags, "field_status": self.status, "quotes": self.quotes, "cost": self.cost}
+                "validator": self.flags, "field_status": self.status, "quotes": self.quotes, "cost": self.cost,
+                "warnings": self.warnings}
 
     def to_markdown(self) -> str:
         return render_markdown(self)
@@ -332,6 +355,9 @@ def build_run_report(pack: Pack, records: list[dict[str, Any]], gold: dict[str, 
     rr.status = field_status(pack, records)
     rr.quotes = quote_summary(records, texts)
     rr.cost = cost_summary(calls, wall_s)
+    warning = context_warning(rr.cost)
+    if warning:
+        rr.warnings.append(warning)
     return rr
 
 
@@ -450,6 +476,6 @@ def render_markdown(rr: RunReport) -> str:
             out.append("Params recorded on every call: `" + ", ".join(f"{k}={v}" for k, v in c["params"].items()) + "`.")
             out.append("")
 
-    if rr.metrics.notes:
-        out += ["Notes:"] + [f"- {n}" for n in rr.metrics.notes]
+    if rr.metrics.notes or rr.warnings:
+        out += ["Notes:"] + [f"- {n}" for n in [*rr.metrics.notes, *rr.warnings]]
     return "\n".join(out).rstrip() + "\n"

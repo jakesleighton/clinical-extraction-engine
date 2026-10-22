@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import keyword
+import re
 from collections.abc import Collection
 from pathlib import Path
 from typing import Any, Literal
@@ -36,7 +37,7 @@ Tier = Literal["deterministic", "standard", "hard"]
 Kind = Literal["attribute", "finding"]
 EvidencePolicy = Literal["required", "optional"]
 # How a derived field reads each input (see packs/base/pack.yaml, derived_fields).
-InputMode = Literal["required", "finding", "optional"]
+InputMode = Literal["required", "finding", "optional", "count"]
 DerivedWhen = Literal["not_stated", "check", "always"]
 
 
@@ -127,11 +128,19 @@ class DerivedField(_Strict):
     on_none: Literal["flag", "skip"] = "flag"   # the rule returned None: a failure, or "cannot derive, leave it"
     evidence: Literal["inherit", "none"] = "inherit"
     stated_column: str | None = None    # gold column (true/false/blank): does the document print the value?
+    stated_pattern: str | None = None   # regex a quoted span must match for a model-stated value to stand;
+                                        # the gold join fills `stated_column` with the same regex
     eval_note: str | None = None
 
     @property
     def input_ids(self) -> list[str]:
         return list(self.inputs)
+
+    @property
+    def stated_regex(self) -> re.Pattern[str] | None:
+        """``stated_pattern`` compiled; its flags live inside it (``(?ix)`` and the like),
+        so the engine's guard and the gold join compile exactly the same thing."""
+        return re.compile(self.stated_pattern) if self.stated_pattern else None
 
     @property
     def input_modes(self) -> dict[str, InputMode]:
@@ -327,6 +336,11 @@ class Pack(_Strict):
                 raise ValueError(f"derived field {der.id!r}: unknown inputs {sorted(unknown)}")
             if der.id in der.input_ids:
                 raise ValueError(f"derived field {der.id!r} cannot be its own input")
+            if der.stated_pattern is not None:
+                try:
+                    re.compile(der.stated_pattern)
+                except re.error as e:
+                    raise ValueError(f"derived field {der.id!r}: stated_pattern is not a valid regex ({e})") from e
             refs = _rule_refs(der.rule, f"derived field {der.id!r}")
             outside = refs - set(der.input_ids)
             if outside:
@@ -554,7 +568,8 @@ def describe(pack: Pack) -> str:
     lines.append(f"derived_fields: {len(pack.derived_fields)}")
     for der in pack.derived_fields:
         lines.append(f"  {der.id} <- {der.rule}   inputs={der.input_modes}  when={der.when}  "
-                     f"on_none={der.on_none}  evidence={der.evidence}  derivation={der.derivation!r}")
+                     f"on_none={der.on_none}  evidence={der.evidence}  derivation={der.derivation!r}  "
+                     f"stated_pattern={'yes' if der.stated_pattern else 'no'}")
     lines.append(f"validation rules: {len(pack.validation)}")
     for rule in pack.validation:
         lines.append(f"  {rule.id}: {rule.rule}   on_fail={rule.on_fail}")

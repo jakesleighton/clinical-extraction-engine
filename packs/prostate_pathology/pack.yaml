@@ -9,9 +9,12 @@
 
 pack:
   name: prostate_pathology
-  version: 3            # 1: Phase 0 scaffold; 2: Phase 1 exemplars + procedure-from-specimen rule;
+  version: 4            # 1: Phase 0 scaffold; 2: Phase 1 exemplars + procedure-from-specimen rule;
                         # 3: derived pT/pN with provenance, stage instructions "as printed",
                         #    hedging exemplar as an opt-in variant, lenient pT scoring
+                        # 4: stated_pattern guard on the derived fields (a stated stage or Grade
+                        #    Group must quote a printed one), nodes_positive read as a count,
+                        #    instruction sentences for pN, grade_group, nodes_positive, margin_positive
   extends: base
 
 document:
@@ -100,9 +103,10 @@ fields:
     instructions: >
       ISUP/WHO Grade Group, only when the report literally prints it ("Grade
       Group 3", "ISUP 3", "WHO grade group 3"). A Gleason score alone is not a
-      Grade Group: then status is not_mentioned. Never compute it from the
-      Gleason patterns; the engine derives it after extraction, with
-      provenance.
+      Grade Group, and neither is a histologic grade ("G3", "grade 3 of 4",
+      "poorly differentiated"): then status is not_mentioned. Never compute
+      it from the Gleason patterns; the engine derives it after extraction,
+      with provenance.
 
   - id: tumor_percent_of_gland
     type: number
@@ -140,7 +144,9 @@ fields:
     allowed: [focal, extensive, present_unspecified]
     instructions: >
       Carcinoma at the inked surgical margin. "Margins negative" or "free of
-      tumor" is explicitly_absent.
+      tumor" is explicitly_absent. An unclear, equivocal or "cannot be
+      excluded" margin is focal (or present_unspecified) with hedging
+      possible or probable, not explicitly_absent.
 
   - id: margin_location
     type: string
@@ -180,7 +186,10 @@ fields:
   - id: nodes_positive
     type: integer
     tier: deterministic
-    instructions: Number of lymph nodes containing metastatic carcinoma.
+    instructions: >
+      Number of lymph nodes containing metastatic carcinoma. This is a count:
+      0 when nodes were examined and none has tumor ("0/12", "negative for
+      metastasis"); explicitly_absent only when no lymph nodes were examined.
 
   - id: pT
     type: enum
@@ -200,9 +209,11 @@ fields:
     instructions: >
       Pathologic N stage as written, with the "p" prefix; "pNO" or "NO" with
       the letter O is pN0. Only a stage the report prints counts: when no N
-      stage is written, status is not_mentioned. Never infer it from the
-      lymph node counts; the engine derives it after extraction, with
-      provenance.
+      stage is written, status is not_mentioned. A lymph node finding ("1 of
+      7 nodes positive", "lymph nodes negative for tumor") is not an N stage,
+      and a stage line without an N category ("pT3a pMX") has none: both are
+      not_mentioned. Never infer it from the lymph node counts; the engine
+      derives it after extraction, with provenance.
 
   # --- Treatment ---------------------------------------------------------------
   - id: treatment_effect
@@ -252,6 +263,12 @@ validation:
 #                The eval scores `stated` and derived cases separately,
 #                anchored on gold columns that say whether the text prints a
 #                stage (scripts/join_gold_labels.py), never on the model's claim.
+#   stated_pattern (v4) a value the model calls stated must quote a span that
+#                prints one; the gold join fills the `stated_column` with the
+#                same regex. A stage returned from a node finding, or a Grade
+#                Group from a histologic grade, is set aside and derived instead
+#                (flag stated_without_printed_value). Verbose regexes: whitespace
+#                and the # comments are ignored by the engine.
 # -----------------------------------------------------------------------------
 derived_fields:
   - id: grade_group
@@ -261,6 +278,11 @@ derived_fields:
     when: not_stated
     evidence: inherit
     stated_column: grade_group_printed     # gold column: does the report text print a Grade Group?
+    stated_pattern: |-                     # verbose regex: whitespace and the # comments are ignored
+      (?ix)                                # case-insensitive; a Gleason score or "ISUP 2005" never matches
+      \b(?:grade\s*groups?|isup(?:\s*(?:grade|group))?|gg)   # "Grade Group", "ISUP grade", "GG"
+      (?:\s*\(isup\))?\s*(?:grade\s*)?[:=\-]?\s*(?:of\s+)?    # "Grade Group (ISUP) 2", "grade group of 4"
+      ([1-5])\b                                              # the group itself
     eval_note: >
       TCGA gold Grade Group is derived from the Gleason patterns for every
       case (GDC records none), so both subsets are scored against a
@@ -283,6 +305,14 @@ derived_fields:
     on_none: skip                           # a biopsy has no pathologic stage: leave pT as extracted
     evidence: inherit
     stated_column: pT_printed               # gold column: does the report text print a T category?
+    stated_pattern: |-                      # verbose regex: whitespace and the # comments are ignored
+      (?x)                                  # "pt" in lower case is never a stage (a word, or "pt."), so the
+                                            # p-forms are case-sensitive; the stage-word form is not. The OCR
+                                            # put a period at every original line or field break, hence the
+                                            # optional periods ("p. T 3a", "T 3a. N 0": one site's template)
+      (?<![A-Za-z])[ymr]?[pP]\.?\s?T\s?[1-4]              # "pT3a", "ypT2c", "PT2" (one all-caps site), "p. T 3a"
+      | \bT\s?[1-4][a-c]?\s*[,.]?\s*p?N\s?[0-3XxOoI]     # a TNM string without the p: "T2c N0", "T 3a NO", "T 3a. N 0"
+      | (?i:stag(?:e|ing))[^.\n]{0,20}\bT\s?[1-4]        # "Stage: T2", "stage is T1", "Staging (pTNM): T 3a"
     eval_note: >
       computed_from_findings covers pT2 to pT3b (seminal vesicle invasion is
       pT3b, extraprostatic extension pT3a, neither is organ-confined: pT2c
@@ -293,12 +323,22 @@ derived_fields:
 
   - id: pN
     derivation: computed_from_nodes
-    inputs: [nodes_examined, nodes_positive]
+    inputs:
+      nodes_examined: required              # no node examined: the rule returns None (on_none: skip)
+      nodes_positive: count                 # "no metastasis" written as explicitly_absent counts as 0
     rule: "pn_from_nodes(nodes_examined, nodes_positive)"
     when: check
     on_none: skip                           # no node examined: no pathologic N
     evidence: inherit
     stated_column: pN_printed               # gold column: does the report text print an N category?
+    stated_pattern: |-                      # verbose regex: whitespace and the # comments are ignored
+      (?x)                                  # the OCR's letter O and I stand for 0 and 1; a category may run
+                                            # straight into a following M, R, L, V or G descriptor or a "pM",
+                                            # not into any other letter ("T2c Nodes" is not a stage); the
+                                            # optional periods are the OCR's line and field breaks ("N 0. M X")
+      (?<![A-Za-z])[ymr]?[pP]N\s?[0-3XxOoI](?=$|[^A-Za-z0-9]|[MmRrLlVvGg]|[pP][Mm])           # "pN0", "pNO", "pNI", "pNX"
+      | \bN\s?[0-3XxOo]\s*[,.]?\s*p?M\s?[01xX]                                                # "N0 M0", "N 0. M X"
+      | \b[pP]?T\s?[1-4][a-c]?\s*[,.]?\s*p?N\s?[0-3XxOoI](?=$|[^A-Za-z0-9]|[MmRrLlVvGg]|[pP][Mm])  # "pT2c NO", "T3a, N1", "pT3bNOMX", "pT3apN0pMX", "T 3a. N 0"
     eval_note: >
       computed_from_nodes is pN1 when any examined node is positive and pN0
       when at least one node was examined and none is; pNX is never derived.

@@ -46,6 +46,11 @@ def test_prostate_merges_base(prostate):
                               "seminal_vesicle_invasion": "finding", "tumor_laterality": "optional"}
     assert pt.stated_column == "pT_printed" and prostate.derived_for("pN").stated_column == "pN_printed"
     assert prostate.derived_for("pN").derivation == "computed_from_nodes"
+    assert prostate.derived_for("pN").input_modes == {"nodes_examined": "required", "nodes_positive": "count"}   # v4
+    # v4: every derived field carries the regex its stated values must quote (verbose, flags inside)
+    assert all(d.stated_pattern and d.stated_regex is not None for d in prostate.derived_fields)
+    assert pt.stated_regex.search("PATHOLOGIC TNM STAGE: pT3a NO MX") and not pt.stated_regex.search("1 of 7 nodes")
+    assert gg.stated_regex.search("grade group 2") and not gg.stated_regex.search("HISTOLOGIC GRADE: G3")
     assert prostate.derived_for("gleason_total") is None
     assert prostate.scored_fields == ["gleason_primary", "gleason_secondary", "gleason_total", "grade_group", "pT", "pN"]
     assert prostate.eval.lenient == {"pT": "prefix"}
@@ -123,6 +128,7 @@ def test_minimal_extension_loads(tmp_path):
     (lambda p: p.update({"derived_fields": [{"id": "b", "derivation": "d", "inputs": {"a": "maybe"}, "rule": "a"}]}), "optional"),
     (lambda p: p.update({"derived_fields": [{"id": "b", "derivation": "d", "inputs": {"a": "finding"}, "rule": "a", "when": "sometimes"}]}), "check"),
     (lambda p: p.update({"derived_fields": [{"id": "b", "derivation": "d", "inputs": ["a"], "rule": "a", "on_none": "ignore"}]}), "skip"),
+    (lambda p: p.update({"derived_fields": [{"id": "b", "derivation": "d", "inputs": ["a"], "rule": "a", "stated_pattern": "(unclosed"}]}), "stated_pattern is not a valid regex"),
     (lambda p: p.update({"eval": {"gold": "g.csv", "scored": ["a"], "lenient": {"b": "prefix"}}}), "not in eval.scored"),
     (lambda p: p.update({"eval": {"gold": "g.csv", "scored": ["a"], "lenient": {"a": "fuzzy"}}}), "prefix"),
     (lambda p: p.update({"eval": {"gold": "g.csv", "scored": ["a", "ghost"]}}), "ghost"),
@@ -223,9 +229,11 @@ def test_exemplar_variants_are_opt_in_but_always_held_out(tmp_path):
         pack.prompt_exemplars(["typo"])
     assert "variant=hedging" in describe(pack)
     # the inputs mapping and the new keys survive a YAML round trip
-    body["derived_fields"] = [{"id": "b", "derivation": "d", "inputs": {"a": "optional"}, "rule": "a",
-                               "when": "check", "on_none": "skip"}]
+    body["derived_fields"] = [{"id": "b", "derivation": "d", "inputs": {"a": "count"}, "rule": "a",
+                               "when": "check", "on_none": "skip", "stated_pattern": "(?ix) grade \\s* ([1-5])"}]
     (d / "mini" / "pack.yaml").write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
     pack = load_pack(d / "mini")
     again = load_merged_yaml(pack.to_yaml(), root=pack.root)
-    assert again.derived_for("b").input_modes == {"a": "optional"} and again.derived_for("b").when == "check"
+    assert again.derived_for("b").input_modes == {"a": "count"} and again.derived_for("b").when == "check"
+    assert again.derived_for("b").stated_pattern == "(?ix) grade \\s* ([1-5])"
+    assert again.derived_for("b").stated_regex.search("GRADE 3") and "stated_pattern=yes" in describe(again)

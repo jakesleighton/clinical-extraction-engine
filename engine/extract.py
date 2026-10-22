@@ -27,19 +27,26 @@ from engine.validate import Issue, apply_derivations, validate_output
 # A context window that is too small is silently truncated from the front,
 # dropping the instructions first. The prompt with three exemplars is about 35k
 # characters and tokenizes to 10-12k tokens (a token per 3.0-3.4 characters on
-# the models run so far), and replies run to about 2k tokens.
-NUM_CTX_STEP = 2048          # Ollama sizes the KV cache in these units
-NUM_CTX_HEADROOM = 4096      # room for the reply plus tokenizer variation
+# the models run so far), and replies run to about 2k tokens. A thinking trace
+# comes out of the same window: gpt-oss:20b at `low` wrote about 4k tokens of
+# it on one Phase 1 report and reached 99% of a 16384 window, so thinking gets
+# twice the headroom.
+NUM_CTX_STEP = 2048                 # Ollama sizes the KV cache in these units
+NUM_CTX_HEADROOM = 4096             # room for the reply plus tokenizer variation, thinking off
+NUM_CTX_HEADROOM_THINKING = 8192    # the same plus a thinking trace (any level, or `true`)
 
 THINK_CHOICES = ("false", "true", "low", "medium", "high")
 
 
-def default_num_ctx(prompt: str) -> int:
+def default_num_ctx(prompt: str, think: bool | str | None = False) -> int:
     """Context window for ``prompt`` unless the caller sets one: a token per
     three characters (a slight overestimate for safety) plus headroom, rounded
-    up to a multiple of 2048, never below the backend's default. Three
-    exemplars give 16384; four give 20480."""
-    need = len(prompt) // 3 + NUM_CTX_HEADROOM
+    up to a multiple of 2048, never below the backend's default. ``think`` is
+    what the backend will be sent; anything but off (``False``/``None``)
+    reserves the larger headroom. Three exemplars give 16384 with thinking
+    off and 20480 with it on; four exemplars 20480 and 24576."""
+    headroom = NUM_CTX_HEADROOM if think in (False, None, "false") else NUM_CTX_HEADROOM_THINKING
+    need = len(prompt) // 3 + headroom
     return max(DEFAULT_NUM_CTX, -(-need // NUM_CTX_STEP) * NUM_CTX_STEP)
 
 
@@ -104,7 +111,7 @@ def extract_document(
     run_id = run_id or ledger.default_run_id()
     shown = pack.prompt_exemplars(exemplar_variants) if include_exemplars else []
     prompt = build_prompt(pack, text, include_exemplars=include_exemplars, exemplar_variants=exemplar_variants)
-    params.setdefault("num_ctx", default_num_ctx(prompt))
+    params.setdefault("num_ctx", default_num_ctx(prompt, params.get("think")))
     schema = build_schema(pack)
     prompt_hash = ledger.sha256_text(prompt)
 
@@ -148,7 +155,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--num-ctx", type=int, default=None,
-                    help="context window (Ollama option; default: sized from the prompt, 16384 with three exemplars)")
+                    help="context window (Ollama option; default: sized from the prompt and --think, "
+                         "16384 with three exemplars and thinking off, 20480 with thinking on)")
     ap.add_argument("--think", default="false", choices=THINK_CHOICES,
                     help="thinking mode for models that have one; false (default) or a level for gpt-oss")
     ap.add_argument("--exemplar-variant", action="append", default=[], metavar="NAME",

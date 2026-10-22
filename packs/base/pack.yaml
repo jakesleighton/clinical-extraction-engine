@@ -128,6 +128,9 @@ envelope:
 #                           the finding is absent (explicitly_absent is information);
 #                           silence (not_mentioned) blocks the derivation
 #                 optional  its value when present, else None; never blocks
+#                 count     its value when present; 0 when the document says there
+#                           are none (explicitly_absent on a count is a zero, the way
+#                           some models write a "0/12"); silence blocks
 #   rule        expression over `inputs` using the same whitelisted function
 #               library as `validation` (engine/rules.py)
 #   when        not_stated (default): only fill when the model did not state it
@@ -143,6 +146,13 @@ envelope:
 #               evidence spans (an absent finding's quote included)
 #   stated_column  gold column (true/false/blank) saying whether the document
 #               prints the value; the eval anchors its stated/derived subsets on it
+#   stated_pattern  regex, flags inside it ((?ix) and the like): a value the model
+#               returned stands as `stated` only when one of its evidence quotes
+#               prints a value of this kind (the regex matches the quoted source
+#               span); otherwise the engine sets it aside (not_mentioned, flagged
+#               stated_without_printed_value) and the derivation fills it. The gold
+#               join runs the same regex over the whole report to fill stated_column,
+#               so the eval's stated/derived split and the guard agree by construction
 #   eval_note   text the eval report prints next to this field's metrics
 # The eval harness reports every derived field two ways: on the subset where
 # the value was stated, and case-level (stated + derived).

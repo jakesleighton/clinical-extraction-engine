@@ -406,3 +406,128 @@ hold-out test covers the tagged case, the exemplar test validates all four
 pairs against the current pack (every stage derivation agrees with the
 printed stage). Test suite: 212, 0 skipped.
 
+
+### 1.7 Re-baseline and hedging arm on the working set (2026-10-22; code at commit 8d7169f)
+
+What: six runs on the 24-case working set with the entry 1.3 to 1.6
+machinery (pack v3). Arm A, run ids `p1-rebase-<model>`: the three carried
+models (gemma4:12b-it-q4_K_M, qwen3.5:9b-q4_K_M, gpt-oss:20b at `--think
+low`) under the pack v3 prompt, with `--groups` and `--gold-notes`, context
+window sized automatically (16384). Arm B, run ids `p1-hedge-<model>`: the
+same with `--exemplar-variant hedging` (four exemplars, window 20480). Same
+settings as entry 1.2 otherwise. Nothing in the repository changed between
+the first and the last run; the step 3 commit was made after the first run
+had started, with the working tree verified unchanged, so every number
+traces to commit 8d7169f. Every run: 24 of 24 records, no errors, every call
+ended with `stop`.
+
+Results (exact-match micro-F1, all 24 / random-20 / weird-5; the same
+replies re-scored with the new machinery in brackets, entry 1.5, for the
+prompt-only comparison): gemma4:12b 87.5 / 91.1 / 75.0 (86.8); qwen3.5:9b
+90.1 / 94.2 / 75.0 (90.8); gpt-oss:20b 90.8 / 95.0 / 75.0 (90.5). Without
+the seven audited gold cases: 95.5 / 99.0 / 99.0. Standard tier unchanged
+since entry 1.2 (92.7 / 94.8 / 94.8). The derived stage subsets are the
+strongest part of the stage score (pT and pN derived: 100 for two models,
+89 and 80 for gemma4, every derived value correct); no model missed a
+printed stage; `derivation_disagrees` fired on the four cases where the
+printed stage contradicts the findings or a second printed stage, as
+designed. The v3 instructions removed the "stage where none is printed" pT
+claims and halved the pN ones. Arm B moved the exact headline by +0.4 / +0.7
+/ −0.7 (lenient +0.4 / 0 / −1.5): it produced the intended hedged margin for
+qwen3.5:9b only (gemma4 already hedged it, gpt-oss still calls it definite),
+pulled two models onto the synoptic stage line on the amended report (the
+amendment rule lost), improved quote fidelity for the two non-thinking
+models, and costs 28% more prompt tokens per case.
+
+Found: (1) a model-independent failure mode: a lymph node finding ("no tumor
+in 6 nodes", "metastatic in 2 of 6", a staging line with an empty N slot)
+returned as a pN value where the report prints no N category, by all three
+models in both arms (one to two cases each; values correct, provenance
+wrong), plus one histologic grade returned as a Grade Group; the instruction
+alone does not stop it. (2) gemma4 writes `nodes_positive` as
+`explicitly_absent` for a count of zero, which blocks the pN derivation (two
+cases). (3) gpt-oss:20b's longest call reached 99.3% of its 16384 window
+(11,238 prompt + 5,024 output tokens, about four thousand of them the
+thinking trace at `low`); nothing was truncated, but the headroom the
+auto-sizer reserves (4096) is the size of that trace. (4) Wall times are not
+comparable this session: per-call latency ran at about twice the entry 1.2
+figure in stretches of four of the six runs with the same token counts
+(another workload on the machine); token counts are the cost reference.
+
+Decisions put to the owner, none applied here: a `stated_pattern` guard on
+derived fields (a model-returned stage or Grade Group must quote a printed
+stage line, else it is set aside and derived; the same regexes as the gold
+`*_printed` columns) plus two instruction sentences; a count input mode
+(`explicitly_absent` passed as 0) plus an instruction for `nodes_positive`;
+park the hedging exemplar (variant stays wired); a think-aware context
+headroom (4096 off, 8192 on) and a context-pressure note above 90% of the
+window; iterate on those before the 374-case sweep; carry all three models
+into the sweep; add the second two-printed-stages case to the gold notes.
+
+Checked: all four columns (entry 1.2 baseline, its re-score, arm A, arm B)
+are recomputed from the saved predictions, ledgers and gold by one script
+kept with the long-form report in the local notes folder; the re-score
+column reproduces entry 1.5's numbers. Test suite unchanged at 212.
+
+
+### 1.8 Pack v4: stated-value guard, count inputs, think-aware context (2026-10-22)
+
+What: the step 4 iteration landed as pack v4 plus engine support, before
+any new model run, so the next runs (`p1-iter1-<model>`) measure the
+instruction changes alone. Every part is in this commit:
+
+- `stated_pattern` on a derived field (`engine/packloader.py`,
+  `engine/validate.py`): a value the model calls stated stands only when one
+  of its evidence quotes prints a value of that kind, judged on the located
+  source span by a regex the pack declares; otherwise the envelope is
+  emptied, flagged `stated_without_printed_value`, and the derivation fills
+  it with the right provenance. The prostate pack declares one pattern each
+  for pT, pN and Grade Group, and `scripts/join_gold_labels.py` now reads
+  those same patterns from the pack to fill the gold's `*_printed` columns
+  (its own copies of the regexes are gone), so the eval's stated/derived
+  split and the guard agree by construction. The patterns are written in
+  verbose form with comments, and were widened for one site's template as
+  the OCR renders it ("p. T 3a", "Staging (pTNM): T 2c. N 0. M x",
+  "pT3apN0pMX"): 28 reports gain a printed pT and 24 a printed pN (385 and
+  353 of 446), none of them in the 24-case working set, so no earlier
+  number moves; the gold CSV is regenerated.
+- `count` input mode for derived fields: `explicitly_absent` on a count is
+  passed to the rule as 0. `nodes_positive` feeds the pN derivation that way.
+- Four instruction sentences: a lymph node finding or a stage line without
+  an N category is not an N stage; a histologic grade is not a Grade Group;
+  `nodes_positive` is a count (0 when nodes were examined and none has
+  tumor, `explicitly_absent` only when none were examined); an unclear,
+  equivocal or "cannot be excluded" margin is focal with hedging possible or
+  probable, not `explicitly_absent`.
+- Context sizing: the auto-sizer reserves 8192 tokens of headroom when
+  thinking is on (any level) and 4096 when off, so gpt-oss:20b at `--think
+  low` now gets 20480 with three exemplars. The report flags a run whose
+  largest call used more than 90% of its window (`context_pressure_high`
+  in the cost summary, plus a note).
+- The second two-printed-stages case joins `data/gold_notes.md` (eight
+  audited cases). The hedging exemplar is parked: the variant stays wired,
+  no run uses it.
+
+Results (the six entry 1.7 runs re-scored with pack v4, no model calls;
+exact micro-F1 all 24 / random-20 / weird-5): gemma4:12b 87.5 / 91.1 / 75.0
+to 88.3 / 92.1 / 75.0 in arm A and 87.9 / 91.6 / 75.0 to 88.3 / 92.1 / 75.0
+in arm B, both from the count input (two reports where it wrote the zero
+node count as `explicitly_absent` now derive pN0; its derived-pN subset goes
+from 80 to 100); qwen3.5:9b and gpt-oss:20b unchanged (90.1 / 90.8 and
+90.8 / 90.1). The guard fired 11 times across the six runs: 9 where the
+gold says no value is printed (the node-finding and histologic-grade cases
+of entry 1.7, every one now derived with the same value and the right
+provenance; the provenance table's "false stated" column is empty for every
+v4 arm) and 2 where the report prints a stage but the quote the model gave
+does not show it (a node-status line; a two-letter quote). No scored value
+changed because of a trip. The context note fires on three of the six
+re-scored runs (99.3%, 90.7% and 90.2% of the window); under the new
+headroom the 99.3% call would sit at 79%.
+
+Checked: 222 tests (was 212), the regenerated gold CSV differs from the
+previous one only in the 52 flipped `*_printed` cells, the four exemplar
+outputs pass the guard, and the comparison script of entry 1.7 gained the
+v4 and iter1 arms, a guard-trip table and a margin watch on the two hedged
+cases; its output and the six re-scored run folders sit in the local notes
+folder with the step summary.
+

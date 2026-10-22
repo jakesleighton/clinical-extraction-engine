@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from evalharness.report import (GoldNote, audited_case_ids, build_run_report, classify_quote, cost_summary,
+from evalharness.report import (GoldNote, audited_case_ids, build_run_report, classify_quote, context_warning, cost_summary,
                                 field_status, flag_summary, quote_summary, read_gold_notes, read_groups)
 from tests.conftest import REPORT, envelope, model_output_for_report
 
@@ -44,7 +44,7 @@ def test_the_tracked_gold_notes_parse():
     from tests.conftest import ROOT
     notes = read_gold_notes(ROOT / "data" / "gold_notes.md")
     assert audited_case_ids(notes) == ["TCGA-HC-A9TE", "TCGA-V1-A9OY", "TCGA-V1-A9OH", "TCGA-J4-A67T",
-                                       "TCGA-SU-A7E7", "TCGA-HC-7749", "TCGA-CH-5741"]
+                                       "TCGA-SU-A7E7", "TCGA-HC-7749", "TCGA-EJ-5504", "TCGA-CH-5741"]
     assert {n.kind for n in notes} == {"gold_disagrees", "gold_stale", "gold_finer", "amendment_rule"}
     groups = read_groups(ROOT / "data" / "tcga_prad" / "case_groups.csv")
     assert len(groups["random20"]) == 20 and len(groups["weird5"]) == 5
@@ -119,8 +119,28 @@ def test_cost_summary_from_ledger_calls():
     assert (c["tokens_in_mean"], c["latency_median_s"], c["latency_max_s"], c["latency_sum_s"], c["wall_s"]) == (1100, 20.0, 30.0, 40, 42)
     assert c["think"] == {"False": 1, "None (rejected by the server)": 1} and c["done_reason"] == {"stop": 1, "length": 1}
     assert c["peak_tokens"] == 1500 and c["context_pressure"] == 0.75 and c["num_ctx"] == 2000
+    assert c["context_pressure_high"] is False and context_warning(c) is None
     empty = cost_summary([])
     assert empty["calls"] == 0 and empty["latency_median_s"] is None and empty["context_pressure"] is None
+    assert empty["context_pressure_high"] is False
+
+
+def test_context_pressure_above_ninety_percent_is_flagged_and_reported(prostate):
+    # gpt-oss:20b on the Phase 1 re-baseline: 11,238 prompt + 5,024 output tokens in a 16384 window
+    calls = [{"latency_s": 60.0, "tokens_in": 11238, "tokens_out": 5024, "params": {"num_ctx": 16384},
+              "meta": {"think": "low", "done_reason": "stop"}},
+             {"latency_s": 20.0, "tokens_in": 11000, "tokens_out": 1500, "params": {"num_ctx": 16384},
+              "meta": {"think": "low", "done_reason": "stop"}}]
+    c = cost_summary(calls)
+    assert c["peak_tokens"] == 16262 and c["context_pressure"] == 0.99 and c["context_pressure_high"] is True
+    assert context_warning(c).startswith("context pressure: the largest call used 16,262 of 16,384 tokens (99.3% of the window")
+    rr = build_run_report(prostate, [], {}, texts={}, calls=calls)
+    assert rr.warnings == [context_warning(c)] and rr.to_dict()["warnings"] == rr.warnings
+    text = rr.to_markdown()
+    assert "16262 (99% of the window)" in text and "Notes:" in text and "\n- context pressure:" in text
+    # exactly 90% is not above the limit
+    at_limit = cost_summary([{"tokens_in": 9000, "tokens_out": 216, "params": {"num_ctx": 10240}}])
+    assert at_limit["context_pressure"] == 0.9 and at_limit["context_pressure_high"] is False
 
 
 def test_build_run_report_scores_groups_and_audited_subsets(prostate):

@@ -113,7 +113,9 @@ python -m evalharness.runner --pack packs/prostate_pathology --model qwen2.5:7b 
     --groups data/tcga_prad/case_groups.csv --gold-notes data/gold_notes.md
 # thinking models (Qwen 3.5, Gemma 4) run with thinking off (--think false is the default);
 # gpt-oss only takes a level, so pass --think low. The context window is sized from the prompt
-# (16384 tokens with the three exemplars, 20480 with the hedging arm; --num-ctx overrides).
+# plus headroom for the reply (4096 tokens; 8192 when thinking is on, since the trace shares the
+# window): 16384 with the three exemplars, 20480 with thinking on or with the hedging arm;
+# --num-ctx overrides. A run whose largest call passes 90% of the window gets a note in its report.
 
 # re-score a finished run with the current pack and engine, no model calls (the ledger keeps
 # every reply verbatim): how a matcher or scoring change moves the numbers
@@ -138,7 +140,8 @@ packs/
                                   a fourth (variant: hedging) only when a run asks for it; all four
                                   case ids are held out of every eval run
     labels/tcga_prad_gold.csv     gold labels for the scored fields, plus columns saying whether
-                                  the report text prints a Grade Group, a pT and a pN
+                                  the report text prints a Grade Group, a pT and a pN (found by
+                                  the pack's own stated_pattern regexes)
 ```
 
 A field is a few lines of YAML:
@@ -168,9 +171,14 @@ its provenance: Grade Group from the Gleason patterns (`derivation: stated |
 computed_from_gleason`), and, for the reports that print no stage line, pT
 from the extent findings of a radical prostatectomy and pN from the node
 counts (`computed_from_findings`, `computed_from_nodes`). A printed stage
-always stands; when the findings disagree with it the record is flagged. The
-eval scores stated and derived cases separately, anchored on gold columns
-that say whether the text prints the value, never on the model's own claim.
+always stands; when the findings disagree with it the record is flagged. A
+value the model calls stated must also quote text that prints one (the
+field's `stated_pattern`, the same regex that labels the gold): a stage
+returned from a node finding, or a Grade Group from a histologic grade, is
+set aside with a flag and derived instead. A count the document gives as
+"none" feeds a derivation as zero (the `count` input mode). The eval scores
+stated and derived cases separately, anchored on gold columns that say
+whether the text prints the value, never on the model's own claim.
 
 Rules are plain expressions evaluated by a small whitelisting interpreter
 (`engine/rules.py`), never `eval()`: packs are data, and public packs will be

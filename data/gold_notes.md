@@ -20,7 +20,8 @@ public TCGA text. Case-level background for the five hand-picked cases is in
 `data/weird_cases.md`.
 
 Audited 2026-10-19 (Phase 1 baseline, all 24 working-set cases read against
-five models' outputs) and recorded 2026-10-22.
+five models' outputs) and recorded 2026-10-22; TCGA-EJ-5504 added 2026-10-22
+after the step 3 re-baseline, where every model's pT missed it.
 
 | case | field(s) | kind | gold | report says | note |
 |---|---|---|---|---|---|
@@ -30,6 +31,7 @@ five models' outputs) and recorded 2026-10-22.
 | TCGA-J4-A67T | pT | gold_stale | pT2c | original "TNM STAGE: AT LEAST pT2c, pNO, pMX"; correction "The TNM stage of the tumor is revised as: TNM stage: pT3a, pNo, pMX" | A signed correction supersedes the original stage; GDC kept pT2c. A model that follows the correction (all five did) scores wrong on pT. Gold has no pN although the text prints pN0 twice. |
 | TCGA-SU-A7E7 | pT | gold_finer | pT2b | "Stage: T2 NO M0, II B" | The text prints no substage. Every model answered pT2 (faithful). The lenient column (prefix match) scores this as correct; the exact column does not. |
 | TCGA-HC-7749 | pT | gold_finer | pT3a | addendum "The staging. is therefore changed to a pT3"; the synoptic below still prints "pTNM stage: pT2cN0" | The addendum prints no substage (the focal extraprostatic extension it describes is pT3a by definition, but the text never says so). A model that follows the addendum answers pT3: correct under the lenient column, wrong under exact. |
+| TCGA-EJ-5504 | pT | gold_disagrees | pT3a | diagnosis "CARCINOMA EXTENSIVELY INFILTRATES RIGHT AND LEFT SEMINAL VESICLES (SLIDES 3/A, 3/C)" and "TNM PATHOLOGIC STAGE: T3a, N1, Mx"; synopsis "T STAGE, PATHOLOGIC: pT3b" (its "SEMINAL VESICLE INVASION:" line is blank) | Two printed stages, like TCGA-HC-A9TE. The diagnosis describes extensive bilateral seminal vesicle invasion, which is pT3b by definition, and the synopsis prints pT3b; the diagnosis line's T3a contradicts its own findings, and GDC kept it. All three re-baseline models answered pT3b, and the engine's derivation from the findings gives pT3b too. |
 | TCGA-CH-5741 | pT, pN | amendment_rule | pT3b, pN1 | summary "pT3b, max. tumor diameter 5.5 cm, Gleason 4+5=9 (Gleason 5 = 20%), L1, V0, pNI (1/5), RI" and diagnosis "1.5 cm carcinoma metastasis without evidence of extranodal tumor growth in one of three. lymph nodes"; follow-up "The final tumor classification is thus as follows: pT3a. Gleason 4+5=9 (Gleason 4: 50%, Gleason 4: 30%), pNO (0/3), L0, V0, R1" | The gold matches the diagnosis. The follow-up, issued after vessel-invasion stains, restates the whole classification with pT3a and pN0 (0/3) although it only re-examined vessel invasion and contradicts the described nodal metastasis and seminal vesicle infiltration. The base pack's amendment rule ("an addendum changes an item: report the revised value, set conflict") gives pT3a / pN0 here and is kept as written (decision of 2026-10-22, step 3 item 3): this case is the recorded counter-example, not a special case in the rule. The pN_matches_nodes rule flags the contradiction when a model also extracts the node counts. |
 
 Known gold quirks that are not errors (left in the scores): TCGA-CH-5764 and

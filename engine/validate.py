@@ -9,7 +9,11 @@ Three layers, in order:
    evidence quotes located in the source (character offsets, and how strict
    a match it took), units on measurements, date formats. These are things a
    grammar cannot express.
-3. **Cross-field rules** — the pack's ``validation`` expressions, run only
+3. **Stated-value guard** — for a field the pack derives with a
+   ``stated_pattern``, a value the model calls stated must be quoted from
+   text that prints one; otherwise it is set aside for the derivation
+   (:func:`apply_stated_guards`).
+4. **Cross-field rules** — the pack's ``validation`` expressions, run only
    when every field they mention has a value.
 
 Then :func:`apply_derivations` fills ``derived_fields`` (e.g. Grade Group
@@ -263,6 +267,7 @@ def validate_output(pack: Pack, parsed: dict[str, Any], text: str) -> Validation
                 out["evidence"].append({"quote": q, "start": hit[0], "end": hit[1], "match": hit[2]})
         record[f.id] = out
 
+    apply_stated_guards(pack, record, issues, text)
     _run_rules(pack, record, issues)
     return ValidationResult(record=record, issues=issues)
 
@@ -315,6 +320,47 @@ def _run_rules(pack: Pack, record: dict[str, dict[str, Any]], issues: list[Issue
 
 
 # ---------------------------------------------------------------------------
+# Stated-value guard
+# ---------------------------------------------------------------------------
+
+def apply_stated_guards(pack: Pack, record: dict[str, dict[str, Any]], issues: list[Issue], text: str) -> None:
+    """For every derived field that declares a ``stated_pattern``: a value the
+    model returned (provenance ``stated``) stands only when one of its evidence
+    quotes prints a value of that kind, i.e. the regex matches the quoted span
+    of the source (the quote as given, when it was not located). Otherwise the
+    envelope is emptied (``not_mentioned``, no evidence) and the record flagged
+    ``stated_without_printed_value``, so :func:`apply_derivations` can fill
+    the field from the findings with the provenance it deserves.
+
+    This is the mechanical half of "only a printed stage counts". A model that
+    returns the node finding "1 of 7 nodes positive" as pN1 has the right
+    value and the wrong provenance, and in the Phase 1 re-baseline no
+    instruction wording stopped that for every model. The gold join
+    (scripts/join_gold_labels.py) runs the same regex over the whole report
+    to fill the field's ``stated_column``, so the eval's stated/derived split
+    and this guard agree by construction. The guard asks whether a value of
+    the kind is printed, not which: a stated pT3 quoted from "pT2c" is a
+    value error for the metric, not a provenance error for the guard.
+    """
+    for d in pack.derived_fields:
+        regex = d.stated_regex
+        if regex is None:
+            continue
+        env = record[d.id]
+        if env["status"] != "value" or env["value"] is None:
+            continue
+        spans = [text[ev["start"]:ev["end"]] if ev.get("start") is not None else ev["quote"]
+                 for ev in env["evidence"]]
+        if any(regex.search(s) for s in spans):
+            continue
+        quoted = "; ".join(repr(s[:60]) for s in spans) or "no evidence"
+        issues.append(Issue("stated_without_printed_value",
+                            f"{d.id}: {env['value']!r} returned as stated but no evidence quote prints a {d.id} "
+                            f"value ({quoted}); set aside for the derivation", d.id))
+        record[d.id] = _empty_envelope()
+
+
+# ---------------------------------------------------------------------------
 # Derived fields
 # ---------------------------------------------------------------------------
 
@@ -334,6 +380,8 @@ def _derivation_inputs(d: DerivedField, record: dict[str, dict[str, Any]]) \
     finding   a value when present; ``None`` when the document says the finding
               is absent (``explicitly_absent``: that is information); silence blocks
     optional  a value when present, else ``None``; never blocks
+    count     a value when present; ``0`` when the document says there are none
+              (``explicitly_absent`` on a count is a zero); silence blocks
     """
     values: dict[str, Any] = {}
     used: list[dict[str, Any]] = []
@@ -344,6 +392,9 @@ def _derivation_inputs(d: DerivedField, record: dict[str, dict[str, Any]]) \
             used.append(e)
         elif mode == "finding" and e["status"] == "explicitly_absent":
             values[fid] = None
+            used.append(e)
+        elif mode == "count" and e["status"] == "explicitly_absent":
+            values[fid] = 0
             used.append(e)
         elif mode == "optional":
             values[fid] = None

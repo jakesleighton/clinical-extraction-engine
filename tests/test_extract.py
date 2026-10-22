@@ -37,11 +37,16 @@ def test_end_to_end_with_mocked_server(prostate, fake_ollama, runs_dir):
     assert rec["fields"]["pT"]["derivation"] == "stated" and rec["fields"]["pN"]["derivation"] == "stated"
 
 
-def test_default_num_ctx_is_sized_from_the_prompt():
+def test_default_num_ctx_is_sized_from_the_prompt_and_the_think_setting():
     assert default_num_ctx("") == DEFAULT_NUM_CTX == 8192
     assert default_num_ctx("x" * 30000) == 14336                    # 10000 tokens + 4096 headroom -> next 2048 step
     assert default_num_ctx("x" * (3 * (16384 - 4096))) == 16384     # exactly on the boundary
     assert default_num_ctx("x" * (3 * (16384 - 4096) + 3)) == 18432
+    # thinking on (any level, or true) reserves 8192: the trace comes out of the same window
+    assert default_num_ctx("x" * 30000, think="low") == 18432       # 10000 + 8192 -> next step
+    assert default_num_ctx("x" * 30000, think=True) == 18432
+    assert default_num_ctx("x" * 30000, think=False) == default_num_ctx("x" * 30000, think=None) == 14336
+    assert default_num_ctx("", think="high") == 8192                # never below the backend default
 
 
 def test_num_ctx_default_follows_the_prompt(prostate, fake_ollama, runs_dir):
@@ -51,6 +56,10 @@ def test_num_ctx_default_follows_the_prompt(prostate, fake_ollama, runs_dir):
     assert fake_ollama.requests[-1]["options"]["num_ctx"] == 16384
     extract_document(prostate, REPORT, model="m", run_id="ctx", exemplar_variants=("hedging",))
     assert fake_ollama.requests[-1]["options"]["num_ctx"] == 20480       # four exemplars need the next size up
+    extract_document(prostate, REPORT, model="m", run_id="ctx", think="low")
+    assert fake_ollama.requests[-1]["options"]["num_ctx"] == 20480       # thinking on: 8192 of headroom
+    extract_document(prostate, REPORT, model="m", run_id="ctx", think=True, exemplar_variants=("hedging",))
+    assert fake_ollama.requests[-1]["options"]["num_ctx"] == 24576
     extract_document(prostate, REPORT, model="m", run_id="ctx", num_ctx=32768)
     assert fake_ollama.requests[-1]["options"]["num_ctx"] == 32768       # an explicit value always wins
     assert fake_ollama.requests[-1]["think"] is False
@@ -99,7 +108,7 @@ def test_cli_writes_record(tmp_path, fake_ollama, runs_dir, capsys):
     code = main([str(doc), "--pack", str(PACKS / "prostate_pathology"), "--model", "gpt-oss:20b",
                  "--run-id", "cli2", "--out", str(out), "--think", "low"])
     assert code == 0 and fake_ollama.requests[1]["think"] == "low"
-    assert fake_ollama.requests[1]["options"]["num_ctx"] == 16384
+    assert fake_ollama.requests[1]["options"]["num_ctx"] == 20480        # --think low: the think-aware headroom
     code = main([str(doc), "--pack", str(PACKS / "prostate_pathology"), "--model", "m",
                  "--run-id", "cli3", "--out", str(out), "--exemplar-variant", "hedging"])
     assert code == 0 and fake_ollama.requests[2]["prompt"].count("## Example") == 4

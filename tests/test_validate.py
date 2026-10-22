@@ -173,10 +173,10 @@ def test_derivation_fills_grade_group_with_provenance(prostate):
 
 def test_derivation_leaves_stated_value_alone(prostate):
     out = model_output_for_report(prostate)
-    out["grade_group"] = envelope("value", 2, ["Gleason score 3+4=7"])
-    result = validate_output(prostate, out, REPORT)
+    out["grade_group"] = envelope("value", 2, ["Grade Group 2"])
+    result = validate_output(prostate, out, REPORT + "Grade Group 2.\n")     # a report that prints it
     apply_derivations(prostate, result.record, result.issues)
-    assert result.record["grade_group"]["derivation"] == "stated"
+    assert result.issues == [] and result.record["grade_group"]["derivation"] == "stated"
 
 
 def test_derivation_needs_all_inputs(prostate):
@@ -202,8 +202,8 @@ def test_derivation_always_flags_disagreement(prostate):
     pack = prostate.model_copy(deep=True)
     pack.derived_fields[0].when = "always"
     out = model_output_for_report(pack)
-    out["grade_group"] = envelope("value", 5, ["Gleason score 3+4=7"])
-    result = validate_output(pack, out, REPORT)
+    out["grade_group"] = envelope("value", 5, ["Grade Group 5"])
+    result = validate_output(pack, out, REPORT + "Grade Group 5.\n")
     assert [i.rule_id for i in result.issues] == ["grade_group_matches_gleason"]
     apply_derivations(pack, result.record, result.issues)
     assert "derivation_disagrees" in _codes(result)
@@ -271,7 +271,7 @@ def test_seminal_vesicle_invasion_gives_pt3b_and_a_disagreement_is_flagged_not_o
 
 def test_coarser_printed_stage_agrees_with_the_computed_one(prostate):
     epe = envelope("value", "focal", ["Extraprostatic extension"])
-    pt = envelope("value", "pT3", ["Pathologic stage"])
+    pt = envelope("value", "pT3", ["Pathologic stage: pT2c pN0."])     # the guard wants a printed stage, not this one
     record, codes = _derive(prostate, {"extraprostatic_extension": epe, "pT": pt})
     assert "derivation_disagrees" not in codes
     assert (record["pT"]["value"], record["pT"]["derivation"]) == ("pT3", "stated")
@@ -282,6 +282,20 @@ def test_silent_finding_blocks_the_derivation_and_optional_laterality_does_not(p
     assert codes == [] and record["pT"]["status"] == "not_mentioned" and record["pT"]["derivation"] is None
     record, codes = _derive(prostate, {"pT": envelope(), "tumor_laterality": envelope()})
     assert codes == [] and (record["pT"]["value"], record["pT"]["derivation"]) == ("pT2", "computed_from_findings")
+
+
+def test_count_input_reads_an_explicitly_absent_count_as_zero(prostate):
+    none_positive = envelope("explicitly_absent", None, ["negative for metastatic carcinoma"])
+    record, codes = _derive(prostate, {"pN": envelope(), "nodes_positive": none_positive})
+    assert codes == []
+    pn = record["pN"]
+    assert (pn["status"], pn["value"], pn["derivation"]) == ("value", "pN0", "computed_from_nodes")
+    assert [e["quote"] for e in pn["evidence"]] == ["Twelve lymph nodes", "(0/12)", "negative for metastatic carcinoma"]
+    # the same envelope on a `required` input blocks the derivation (the v3 behaviour)
+    strict = prostate.model_copy(deep=True)
+    strict.derived_for("pN").inputs = ["nodes_examined", "nodes_positive"]
+    record, codes = _derive(strict, {"pN": envelope(), "nodes_positive": none_positive})
+    assert codes == [] and record["pN"]["status"] == "not_mentioned"
 
 
 def test_on_none_skip_leaves_the_field_without_a_flag(prostate):
@@ -297,3 +311,68 @@ def test_on_none_skip_leaves_the_field_without_a_flag(prostate):
     zero = envelope("value", 0, ["Twelve lymph nodes"])
     record, codes = _derive(strict, {"pN": envelope(), "nodes_examined": zero})
     assert "derivation_failed" in codes and record["pN"]["status"] == "not_mentioned"
+
+
+# ---------------------------------------------------------------------------
+# stated-value guard (`stated_pattern`): a stated stage must quote a printed one
+# ---------------------------------------------------------------------------
+
+def test_stated_stage_quoted_from_a_node_finding_is_set_aside_and_derived(prostate):
+    pn = envelope("value", "pN0", ["(0/12)"])                      # right value, quoted from the node count
+    record, codes = _derive(prostate, {"pN": pn})
+    assert codes == ["stated_without_printed_value"]
+    env = record["pN"]
+    assert (env["status"], env["value"], env["derivation"]) == ("value", "pN0", "computed_from_nodes")
+    assert [e["quote"] for e in env["evidence"]] == ["Twelve lymph nodes", "(0/12)"]      # the inputs' evidence
+    # pT the same way, and a Grade Group quoted from the Gleason score
+    pt = envelope("value", "pT2c", ["Extraprostatic extension: Not identified."])
+    gg = envelope("value", 2, ["Gleason score 3+4=7"])
+    record, codes = _derive(prostate, {"pT": pt, "grade_group": gg})
+    assert sorted(codes) == ["stated_without_printed_value", "stated_without_printed_value"]
+    assert (record["pT"]["value"], record["pT"]["derivation"]) == ("pT2c", "computed_from_findings")
+    assert (record["grade_group"]["value"], record["grade_group"]["derivation"]) == (2, "computed_from_gleason")
+
+
+def test_guard_message_names_the_quotes_and_an_underivable_field_stays_empty(prostate):
+    biopsy = envelope("value", "needle_biopsy", ["radical prostatectomy"])
+    pt = envelope("value", "pT3a", ["Perineural invasion: Present."])
+    output = model_output_for_report(prostate)
+    output.update({"specimen_procedure": biopsy, "pT": pt})
+    result = validate_output(prostate, output, REPORT)
+    [issue] = result.issues
+    assert issue.code == "stated_without_printed_value" and issue.field == "pT" and issue.severity == "flag"
+    assert "'pT3a' returned as stated" in issue.message and "'Perineural invasion: Present.'" in issue.message
+    apply_derivations(prostate, result.record, result.issues)
+    assert result.record["pT"] == {"status": "not_mentioned", "value": None, "unit": None, "hedging": None,
+                                   "conflict": False, "evidence": [], "derivation": None}
+
+
+def test_guard_matches_the_located_source_span_not_the_model_s_spelling(prostate):
+    # the quote drops the colon and the period: located by the punctuation pass, and the span it lands on
+    # ("Pathologic stage: pT2c pN0") prints the stage, so the value stands as stated
+    pt = envelope("value", "pT2c", ["pathologic stage pT2c pN0"])
+    record, codes = _derive(prostate, {"pT": pt})
+    assert codes == []
+    assert (record["pT"]["value"], record["pT"]["derivation"]) == ("pT2c", "stated")
+    assert record["pT"]["evidence"][0]["match"] == "punctuation"
+    # a quote the locator cannot find is judged as written (evidence_not_found is its own flag)
+    pt = envelope("value", "pT2c", ["Final stage pT2c, per the addendum"])
+    record, codes = _derive(prostate, {"pT": pt})
+    assert codes == ["evidence_not_found"]
+    assert (record["pT"]["value"], record["pT"]["derivation"]) == ("pT2c", "stated")
+
+
+def test_guard_asks_for_a_printed_value_of_the_kind_not_the_same_value(prostate):
+    pt = envelope("value", "pT3a", ["Pathologic stage: pT2c pN0."])    # a value error, not a provenance error
+    record, codes = _derive(prostate, {"pT": pt})
+    assert codes == ["derivation_disagrees"]
+    assert (record["pT"]["value"], record["pT"]["derivation"]) == ("pT3a", "stated")
+
+
+def test_guard_only_applies_where_the_pack_declares_a_pattern(prostate):
+    loose = prostate.model_copy(deep=True)
+    loose.derived_for("pN").stated_pattern = None
+    pn = envelope("value", "pN0", ["(0/12)"])
+    record, codes = _derive(loose, {"pN": pn})
+    assert codes == [] and (record["pN"]["value"], record["pN"]["derivation"]) == ("pN0", "stated")
+

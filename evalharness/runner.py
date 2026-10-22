@@ -238,7 +238,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--num-ctx", type=int, default=None,
-                    help="context window (default: sized from the prompt, 16384 with three exemplars)")
+                    help="context window (default: sized from the prompt and --think: 16384 with three exemplars "
+                         "and thinking off, 20480 with thinking on)")
     ap.add_argument("--think", default="false", choices=THINK_CHOICES,
                     help="thinking mode for models that have one; false (default) or a level for gpt-oss")
     args = ap.parse_args(argv)
