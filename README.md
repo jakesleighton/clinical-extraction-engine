@@ -98,6 +98,8 @@ python -m scripts.fetch_tcga_reports     # TCGA-Reports corpus -> data/tcga_prad
 python -m scripts.join_gold_labels       # GDC clinical -> packs/prostate_pathology/labels/tcga_prad_gold.csv
 python -m scripts.working_set random --n 20            # initial smoke-test set: a seeded draw ...
 python -m scripts.working_set pick TCGA-XX-1234 ...    # ... or exactly the cases you choose (add/remove/show too)
+python -m scripts.working_set --out data/tcga_prad/sweep_ids.txt all   # the full denominator: every staged case
+                                                       # with complete gold, the pack's exemplars left out (370)
 python -m scripts.weirdness_screen                     # rank reports by cheap trouble heuristics -> data/weird_case_candidates.md
 python -m engine.packloader packs/prostate_pathology   # show the merged pack (--yaml, --schema)
 
@@ -112,10 +114,18 @@ python -m evalharness.runner --pack packs/prostate_pathology --model qwen2.5:7b 
     --reports data/tcga_prad/reports --ids data/tcga_prad/working_set.txt \
     --groups data/tcga_prad/case_groups.csv --gold-notes data/gold_notes.md
 # thinking models (Qwen 3.5, Gemma 4) run with thinking off (--think false is the default);
-# gpt-oss only takes a level, so pass --think low. The context window is sized from the prompt
-# plus headroom for the reply (4096 tokens; 8192 when thinking is on, since the trace shares the
-# window): 16384 with the three exemplars, 20480 with thinking on or with the hedging arm;
-# --num-ctx overrides. A run whose largest call passes 90% of the window gets a note in its report.
+# gpt-oss only takes a level, so pass --think low. The context window is sized once per run, from
+# its longest prompt plus headroom for the reply (4096 tokens; 8192 when thinking is on, since the
+# trace shares the window): 18432 for the working set with three exemplars, 22528 with thinking on,
+# 20480 and 24576 over the full denominator; --num-ctx overrides. One window for the whole run keeps
+# every call on the same settings and stops Ollama reloading the model between calls (it reloads
+# whenever num_ctx changes). A run whose largest call passes 90% of its window gets a note in its report.
+
+# the full sweep: one run per model over data/tcga_prad/sweep_ids.txt (370 cases), one after another,
+# nothing else running on the machine; about 4 to 5 hours a model on an M4 Max at the working-set rates
+python -m evalharness.runner --pack packs/prostate_pathology --model gemma4:12b-it-q4_K_M \
+    --reports data/tcga_prad/reports --ids data/tcga_prad/sweep_ids.txt \
+    --groups data/tcga_prad/case_groups.csv --gold-notes data/gold_notes.md --run-id p1-sweep-gemma4-12b-q4km
 
 # re-score a finished run with the current pack and engine, no model calls (the ledger keeps
 # every reply verbatim): how a matcher or scoring change moves the numbers
@@ -199,7 +209,7 @@ containers/       Dockerfile (local), singularity.def (HPC batch)
 tests/            pytest suite; the model server is mocked
 data/, runs/      gitignored: staged reports and run ledgers never enter the repo
                   (exceptions, all public case ids and TCGA text: data/weird_cases.md, data/gold_notes.md,
-                  data/tcga_prad/working_set.txt, data/tcga_prad/case_groups.csv)
+                  data/tcga_prad/working_set.txt, data/tcga_prad/sweep_ids.txt, data/tcga_prad/case_groups.csv)
 notes/            gitignored: local working notes and project-internal documents
 ```
 

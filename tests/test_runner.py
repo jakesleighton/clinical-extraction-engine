@@ -147,6 +147,27 @@ def test_groups_gold_notes_and_variant_land_in_the_report(world, monkeypatch, tm
         run(pack, model="m", reports_dir=world["reports"], gold_path=str(world["gold"]), exemplar_variants=["nope"])
 
 
+def test_one_context_window_per_run_sized_for_the_longest_prompt(world, monkeypatch, capsys):
+    from engine.extract import default_num_ctx
+    pack = load_pack(world["pack"])
+    long_report = world["reports"] / f"{IDS[2]}.txt"
+    long_report.write_text(long_report.read_text(encoding="utf-8") + "\nAddendum. " * 2500, encoding="utf-8")
+    fake = FakeOllama(model_output_for_report(pack)).install(monkeypatch)
+    report, out_dir = run(pack, model="m", reports_dir=world["reports"], gold_path=str(world["gold"]), run_id="win")
+    windows = [req["options"]["num_ctx"] for req in fake.requests]
+    per_call = [default_num_ctx(req["prompt"]) for req in fake.requests]
+    assert len(windows) == 2 and per_call[0] < per_call[1]             # the long report alone would need more
+    assert windows == [max(per_call)] * 2                               # every call gets the run's largest window
+    assert f"context window {max(per_call)} for every call (sized for the longest prompt in the run)" in capsys.readouterr().err
+    assert any(n.startswith(f"context window {max(per_call)} for every call") for n in report.notes)
+    d = json.loads((out_dir / "metrics.json").read_text())
+    assert d["cost"]["windows"] == {str(max(per_call)): 2} and d["cost"]["num_ctx"] == max(per_call)   # JSON keys
+    fake.requests.clear()
+    run(pack, model="m", reports_dir=world["reports"], gold_path=str(world["gold"]), run_id="win2", num_ctx=4096)
+    assert [req["options"]["num_ctx"] for req in fake.requests] == [4096, 4096]       # an explicit value always wins
+    assert "context window 4096 for every call (--num-ctx)" in capsys.readouterr().err
+
+
 def test_cli_flags(world, monkeypatch, tmp_path, capsys):
     pack = load_pack(world["pack"])
     FakeOllama(model_output_for_report(pack)).install(monkeypatch)

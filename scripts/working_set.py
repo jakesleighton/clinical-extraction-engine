@@ -5,6 +5,9 @@
     python -m scripts.working_set add ID [ID ...]      # append to the current set
     python -m scripts.working_set remove ID [ID ...]
     python -m scripts.working_set show                 # the set, with gold labels and report length
+    python -m scripts.working_set --out data/tcga_prad/sweep_ids.txt all
+                                                       # the full denominator: every staged case with
+                                                       # complete labels, the pack's exemplars left out
 
 The set is ``data/tcga_prad/working_set.txt``, one case id per line (``#``
 starts a comment). Git tracks it, unlike the rest of ``data/``: it holds
@@ -130,6 +133,9 @@ def main(argv: list[str] | None = None) -> int:
     p_random.add_argument("--n", type=int, default=20)
     p_random.add_argument("--seed", type=int, default=0)
     p_random.add_argument("--force", action="store_true", help="replace an existing working set")
+    p_all = sub.add_parser("all", help="every staged case with complete labels, the pack's exemplars left out: "
+                                       "the full eval denominator (write it with --out, not over the working set)")
+    p_all.add_argument("--force", action="store_true", help="replace an existing file")
     for name, help_ in [("pick", "exactly these cases, in this order (replaces the set)"),
                         ("add", "append these cases"), ("remove", "drop these cases")]:
         sub.add_parser(name, help=help_).add_argument("ids", nargs="+")
@@ -153,18 +159,22 @@ def main(argv: list[str] | None = None) -> int:
                   f"or `python -m scripts.working_set pick ID ...`", file=sys.stderr)
             return 1
         chosen = current
-    elif args.cmd == "random":
+    elif args.cmd in ("random", "all"):
         if current and not args.force:
-            print(f"working set already has {len(current)} case(s) in {out}; pass --force to replace it, "
-                  f"or `pick`/`add` to change it", file=sys.stderr)
+            print(f"{out} already has {len(current)} case(s); pass --force to replace it"
+                  + (", or `pick`/`add` to change it" if args.cmd == "random" else ""), file=sys.stderr)
             return 1
         exemplars = set(pack.exemplar_ids)
         eligible = [c for c in complete_ids(staged, gold, scored) if c not in exemplars]
-        chosen = draw_random(eligible, args.n, args.seed)
+        chosen = draw_random(eligible, args.n, args.seed) if args.cmd == "random" else eligible
         write_set(out, chosen)
-        print(f"working set: {len(chosen)} case(s) drawn from {len(eligible)} with complete labels"
-              + (f" (the pack's {len(exemplars)} exemplar case(s) left out)" if exemplars else "")
-              + f" (seed {args.seed}) -> {out}", file=sys.stderr)
+        left_out = f" (the pack's {len(exemplars)} exemplar case(s) left out)" if exemplars else ""
+        if args.cmd == "random":
+            print(f"working set: {len(chosen)} case(s) drawn from {len(eligible)} with complete labels{left_out}"
+                  f" (seed {args.seed}) -> {out}", file=sys.stderr)
+        else:
+            print(f"denominator: all {len(chosen)} staged case(s) with complete labels{left_out} -> {out}",
+                  file=sys.stderr)
     else:
         ids = dedupe([normalize_id(i) for i in args.ids])
         if args.cmd == "remove":

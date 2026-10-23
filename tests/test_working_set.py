@@ -73,6 +73,17 @@ def test_random_draws_only_complete_gold_cases(staged, capsys):
     assert len(read_id_file(staged["out"])) == 2
 
 
+def test_all_writes_every_complete_gold_case_minus_the_exemplars(staged, pack_with_exemplar, capsys):
+    argv = _argv(staged, "all")
+    argv[1] = pack_with_exemplar
+    assert main(argv) == 0
+    assert read_id_file(staged["out"]) == ["TCGA-AA-0001", "TCGA-AA-0003", "TCGA-AA-0004"]   # not 0002 (exemplar), 0005 (incomplete), 0006 (no gold)
+    assert "denominator: all 3 staged case(s) with complete labels (the pack's 1 exemplar case(s) left out)" in capsys.readouterr().err
+    assert main(argv) == 1                                   # refuses to clobber an existing file
+    assert "pass --force to replace it" in capsys.readouterr().err
+    assert main([*argv, "--force"]) == 0
+
+
 def test_pick_keeps_order_and_flags_gold_gaps(staged, capsys):
     assert main(_argv(staged, "pick", "TCGA-AA-0006", "TCGA-AA-0005.txt", "TCGA-AA-0001", "TCGA-AA-0001")) == 0
     assert read_id_file(staged["out"]) == ["TCGA-AA-0006", "TCGA-AA-0005", "TCGA-AA-0001"]

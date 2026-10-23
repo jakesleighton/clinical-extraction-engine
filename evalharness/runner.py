@@ -38,8 +38,9 @@ import pandas as pd
 
 from adapters import jsonl
 from engine import ledger
-from engine.extract import THINK_CHOICES, extract_document, parse_think
+from engine.extract import THINK_CHOICES, default_num_ctx, extract_document, parse_think
 from engine.packloader import Pack, PackError, load_pack
+from engine.prompt_builder import build_prompt
 from evalharness.metrics import DEFAULT_ABSENT_TOKEN
 from evalharness.report import GoldNote, RunReport, build_run_report, read_gold_notes, read_groups
 
@@ -187,6 +188,16 @@ def run(pack: Pack, *, model: str, reports_dir: Path, backend: str = "ollama", i
                                                          if exemplar_variants else ""), file=sys.stderr)
 
     texts = read_texts(reports_dir, cases)
+    if params.get("num_ctx") is None:
+        # One window for the whole run, sized for its longest prompt: every call then runs on the same
+        # settings, the cost line's num_ctx is true of every call, and Ollama keeps the model loaded
+        # (it reloads the model whenever num_ctx changes between calls, 5-13 s a switch on a laptop).
+        params["num_ctx"] = max(default_num_ctx(build_prompt(pack, texts[c], exemplar_variants=exemplar_variants),
+                                                params.get("think")) for c in cases)
+        window_note = f"context window {params['num_ctx']} for every call (sized for the longest prompt in the run)"
+    else:
+        window_note = f"context window {params['num_ctx']} for every call (--num-ctx)"
+    print(f"  {window_note}", file=sys.stderr)
     records: list[dict[str, Any]] = []
     t0 = time.perf_counter()
     for i, case_id in enumerate(cases, 1):
@@ -207,6 +218,7 @@ def run(pack: Pack, *, model: str, reports_dir: Path, backend: str = "ollama", i
               + (f"; variants on: {', '.join(sorted(set(exemplar_variants)))}" if exemplar_variants else "")]
     if exemplars:
         header.append(f"pack exemplars held out of the run ({len(exemplars)}): " + ", ".join(sorted(exemplars)))
+    header.append(window_note)
     if groups:
         header.append("groups: " + ", ".join(f"{g} ({len(m)})" for g, m in groups.items()))
     if gold_notes:

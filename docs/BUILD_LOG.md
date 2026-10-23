@@ -531,3 +531,89 @@ v4 and iter1 arms, a guard-trip table and a margin watch on the two hedged
 cases; its output and the six re-scored run folders sit in the local notes
 folder with the step summary.
 
+### 1.9 Iter1: the pack v4 prompt on the working set (2026-10-23; code at commit f068724)
+
+What: three runs (`p1-iter1-<model>`) on the 24-case working set with the
+pack v4 prompt, the settings of entry 1.7's arm A otherwise (three
+exemplars, temperature 0, seed 0, thinking off; gpt-oss:20b at `--think
+low`). The comparison script scores them beside arm A re-scored under v4
+(`rebase_v4`), so the difference is the prompt alone.
+
+Results (exact micro-F1 all 24 / random-20 / weird-5; the `rebase_v4` arm
+in brackets): gemma4:12b 89.8 / 93.7 / 75.0 (88.3 / 92.1 / 75.0),
+qwen3.5:9b 90.8 / 95.0 / 75.0 (90.1 / 94.2 / 75.0), gpt-oss:20b 90.8 / 94.2
+/ 78.6 (90.8 / 95.0 / 75.0). Without the eight audited gold cases (n=16):
+99.5, 100, 100 (was 97.4, 100, 100). Scored cells that moved: gemma4 reads
+"Secondary pattern: 4/5" as 4 now (two gains); qwen and gpt-oss each
+flipped the two-printed-stages case the other way (one gain, one loss);
+gpt-oss follows the diagnosis instead of the follow-up on the amendment
+case (two gains, matching gold) and the "5+4" phrase instead of "5+3=8" on
+the self-contradicting Gleason case (two losses, where gold matches
+neither). The four instruction sentences did what they were for, mostly at
+the source: the guard fired 3 times in iter1 (6 in `rebase_v4`), none on a
+Grade Group, the "false stated" column stays empty, and the one unprinted
+claim left (a stage line without an N category, quoted for pN) is set
+aside and derived to the same value; the two others quote a node-status
+line for a pN the report prints elsewhere, same value either way. Zero
+node counts written as `explicitly_absent` with nodes examined: gemma4 4
+to 1, gpt-oss 0 to 0, qwen 0 to 1 (a report that names no count; it also
+set `nodes_examined` absent). The hedged-margin sentence: on the
+"cannot be unequivocally excluded" report all three models now hedge
+(gemma4 already did); on the "status of the margin is unclear ... no
+unequivocal evidence of tumor contact" report qwen moved to focal/probable
+and the other two still write `explicitly_absent`. Prompt +144 tokens a
+call (+1.3%); walls 19.9, 20.0 and 15.9 minutes.
+
+Checked: every number above is recomputed from the saved predictions,
+ledgers and gold by the comparison script (`--arms rebase,rebase_v4,iter1`);
+the per-case envelopes behind each moved cell and the margin watch are
+printed by a probe script beside it, both in the local notes folder with
+the iter1 report.
+
+### 1.10 One context window per run; context pressure per call; the sweep denominator (2026-10-23)
+
+What: two corrections to the context-window machinery, found while reading
+the iter1 ledgers, and the id list for the full sweep, all before the sweep
+runs:
+
+- The runner sizes the window once per run, for its longest prompt, and
+  every call uses it (`--num-ctx` still overrides; the run header and the
+  report say which). Until now the auto-sizer worked call by call, so one
+  run mixed windows (on the working set with three exemplars, 11 calls at
+  16384 and 13 at 18432), and Ollama reloads the model whenever `num_ctx`
+  changes between calls. A regression of call latency on prompt tokens,
+  reply tokens and "window differs from the previous call" over the six
+  entry 1.7 and 1.9 ledgers puts one change at about 13 s for gemma4:12b,
+  8 s for qwen3.5:9b and 5 to 10 s for gpt-oss:20b, 7 changes a 24-case
+  run; over 370 cases in id order it would be about 185 changes, or 40, 25
+  and 15 minutes a model. The window does not change what the model
+  computes for a prompt that fits, so the 22 working-set cases inside the
+  sweep are also a check that the same prompt gives the same answer in a
+  larger window.
+- `cost_summary` measures context pressure per call, against that call's
+  own window, and reports the windows a run used. It had divided the
+  largest call's tokens by the first call's window, which overstated three
+  of the four notes so far: entry 1.7's gpt-oss:20b call reported at 99.3%
+  of 16384 ran in an 18432 window (88.2%); the qwen3.5:9b notes of entries
+  1.8 (90.2%) and 1.9 (91.1%) were calls in 18432 windows, and those runs'
+  true largest shares are 81.5% and 82.4%. The hedging-arm gpt-oss note
+  (90.7%) was right. No call was ever within 2,000 tokens of its window and
+  nothing was cut; the earlier reports carry an erratum line.
+- `python -m scripts.working_set --out data/tcga_prad/sweep_ids.txt all`
+  writes the full eval denominator: every staged case with complete gold,
+  the pack's exemplars left out. `data/tcga_prad/sweep_ids.txt` holds 370
+  of the 374 complete-gold cases with a report (the four exemplars are held
+  out) and is tracked like the working set, so the sweep's denominator is a
+  list anyone can diff, not a rule. Two working-set cases are outside it
+  (their gold is incomplete).
+
+Checked: 224 tests (was 222): the runner gives two reports of different
+length the same window and `--num-ctx` still wins; the pressure test puts
+entry 1.7's largest call in its real window (88%, no note) and in a 16384
+window (99%, note), plus a mixed-window run where the smaller call is the
+one under pressure; the `all` subcommand leaves out the exemplar, the
+incomplete and the unlabelled case. The comparison script prints the
+windows and the peak call per arm the same way. A pre-check over the 370
+sweep reports with the chars-per-token rates measured in iter1 (3.2 to 3.4)
+and each model's longest iter1 reply predicts no call above 90% of the
+per-run windows (20480 for gemma4 and qwen, 24576 for gpt-oss).

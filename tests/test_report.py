@@ -119,25 +119,42 @@ def test_cost_summary_from_ledger_calls():
     assert (c["tokens_in_mean"], c["latency_median_s"], c["latency_max_s"], c["latency_sum_s"], c["wall_s"]) == (1100, 20.0, 30.0, 40, 42)
     assert c["think"] == {"False": 1, "None (rejected by the server)": 1} and c["done_reason"] == {"stop": 1, "length": 1}
     assert c["peak_tokens"] == 1500 and c["context_pressure"] == 0.75 and c["num_ctx"] == 2000
+    assert c["windows"] == {2000: 2}
     assert c["context_pressure_high"] is False and context_warning(c) is None
     empty = cost_summary([])
     assert empty["calls"] == 0 and empty["latency_median_s"] is None and empty["context_pressure"] is None
-    assert empty["context_pressure_high"] is False
+    assert empty["context_pressure_high"] is False and empty["windows"] == {}
 
 
-def test_context_pressure_above_ninety_percent_is_flagged_and_reported(prostate):
-    # gpt-oss:20b on the Phase 1 re-baseline: 11,238 prompt + 5,024 output tokens in a 16384 window
-    calls = [{"latency_s": 60.0, "tokens_in": 11238, "tokens_out": 5024, "params": {"num_ctx": 16384},
+def test_context_pressure_is_measured_per_call_against_its_own_window(prostate):
+    # gpt-oss:20b on the Phase 1 re-baseline: its largest call (11,238 prompt + 5,024 output tokens) ran in
+    # the 18432 window the per-call sizer gave that report, while most calls had 16384. Measured against its
+    # own window it sits at 88%, no warning; measured against the run's first window it would read 99%.
+    calls = [{"latency_s": 60.0, "tokens_in": 11238, "tokens_out": 5024, "params": {"num_ctx": 18432},
               "meta": {"think": "low", "done_reason": "stop"}},
              {"latency_s": 20.0, "tokens_in": 11000, "tokens_out": 1500, "params": {"num_ctx": 16384},
               "meta": {"think": "low", "done_reason": "stop"}}]
     c = cost_summary(calls)
+    assert c["windows"] == {16384: 1, 18432: 1}
+    assert c["peak_tokens"] == 16262 and c["num_ctx"] == 18432 and c["context_pressure"] == 0.88
+    assert c["context_pressure_high"] is False and context_warning(c) is None
+    assert "| 16384 x1, 18432 x1 | 16262 (88% of its window) |" in build_run_report(prostate, [], {}, texts={}, calls=calls).to_markdown()
+    # the same call in a 16384 window: 99%, flagged, and the note names that call's window
+    calls[0]["params"]["num_ctx"] = 16384
+    c = cost_summary(calls)
+    assert c["windows"] == {16384: 2} and c["num_ctx"] == 16384
     assert c["peak_tokens"] == 16262 and c["context_pressure"] == 0.99 and c["context_pressure_high"] is True
-    assert context_warning(c).startswith("context pressure: the largest call used 16,262 of 16,384 tokens (99.3% of the window")
+    assert context_warning(c).startswith("context pressure: the largest call used 16,262 of 16,384 tokens (99.3% of its window, above 90%). A reply")
     rr = build_run_report(prostate, [], {}, texts={}, calls=calls)
     assert rr.warnings == [context_warning(c)] and rr.to_dict()["warnings"] == rr.warnings
     text = rr.to_markdown()
-    assert "16262 (99% of the window)" in text and "Notes:" in text and "\n- context pressure:" in text
+    assert "| 16384 | 16262 (99% of its window) |" in text and "Notes:" in text and "\n- context pressure:" in text
+    # a smaller call in a smaller window can be the one under pressure
+    mixed = cost_summary([{"tokens_in": 12000, "tokens_out": 2000, "params": {"num_ctx": 18432}},
+                          {"tokens_in": 13500, "tokens_out": 1500, "params": {"num_ctx": 16384}}])
+    assert mixed["peak_tokens"] == 15000 and mixed["num_ctx"] == 16384 and mixed["context_pressure"] == 0.92
+    assert mixed["context_pressure_high"] is True
+    assert "(91.6% of its window, above 90%) (this run used 2 window sizes, 16,384 x1, 18,432 x1; each call is measured against its own)." in context_warning(mixed)
     # exactly 90% is not above the limit
     at_limit = cost_summary([{"tokens_in": 9000, "tokens_out": 216, "params": {"num_ctx": 10240}}])
     assert at_limit["context_pressure"] == 0.9 and at_limit["context_pressure_high"] is False

@@ -251,8 +251,12 @@ CONTEXT_PRESSURE_LIMIT = 0.9
 
 def cost_summary(calls: list[dict[str, Any]], wall_s: float | None = None) -> dict[str, Any]:
     """Token, latency and window figures from the run's ``llm_call`` lines.
-    ``context_pressure`` is the largest call's tokens (prompt plus output) over
-    ``num_ctx``; ``context_pressure_high`` says it passed
+    ``context_pressure`` is the largest share of a window any one call used
+    (its prompt plus output tokens over its own ``num_ctx``: calls of one run
+    can have different windows when the auto-sizer sized them one by one, so
+    a run-wide peak over one window would mix two calls); ``peak_tokens`` and
+    ``num_ctx`` describe that call, and ``windows`` counts the window sizes
+    the run used. ``context_pressure_high`` says the share passed
     ``CONTEXT_PRESSURE_LIMIT``, and the report then carries a warning."""
     lat = [c["latency_s"] for c in calls if isinstance(c.get("latency_s"), (int, float))]
     tin = [c["tokens_in"] for c in calls if isinstance(c.get("tokens_in"), int)]
@@ -264,9 +268,18 @@ def cost_summary(calls: list[dict[str, Any]], wall_s: float | None = None) -> di
         think[f"{meta.get('think')!r}" + (" (rejected by the server)" if meta.get("think_rejected") else "")] += 1
         done[str(meta.get("done_reason"))] += 1
     params = dict(calls[0].get("params") or {}) if calls else {}
-    num_ctx = params.get("num_ctx")
+    windows: Counter[int] = Counter()
     peak = max((c.get("tokens_in") or 0) + (c.get("tokens_out") or 0) for c in calls) if calls else None
-    pressure = peak / num_ctx if peak and num_ctx else None
+    num_ctx = params.get("num_ctx")
+    pressure = None
+    for c in calls:                                  # each call against its own window
+        ctx = (c.get("params") or {}).get("num_ctx")
+        used = (c.get("tokens_in") or 0) + (c.get("tokens_out") or 0)
+        if not isinstance(ctx, int) or ctx <= 0:
+            continue
+        windows[ctx] += 1
+        if used and (pressure is None or used / ctx > pressure):
+            pressure, peak, num_ctx = used / ctx, used, ctx
     return {"calls": len(calls), "errors": sum(1 for c in calls if c.get("error")),
             "tokens_in": sum(tin), "tokens_in_mean": round(statistics.mean(tin)) if tin else None,
             "tokens_out": sum(tout), "tokens_out_mean": round(statistics.mean(tout)) if tout else None,
@@ -275,7 +288,7 @@ def cost_summary(calls: list[dict[str, Any]], wall_s: float | None = None) -> di
             "latency_sum_s": round(sum(lat)) if lat else None,
             "wall_s": None if wall_s is None else round(wall_s),
             "think": dict(think), "done_reason": dict(done), "params": params,
-            "num_ctx": num_ctx, "peak_tokens": peak,
+            "num_ctx": num_ctx, "peak_tokens": peak, "windows": dict(sorted(windows.items())),
             "context_pressure": (round(pressure, 2) if pressure is not None else None),
             "context_pressure_high": (pressure is not None and pressure > CONTEXT_PRESSURE_LIMIT)}
 
@@ -284,10 +297,13 @@ def context_warning(cost: dict[str, Any]) -> str | None:
     """The note a report carries when the largest call passed the limit."""
     if not cost.get("context_pressure_high"):
         return None
+    windows = cost.get("windows") or {}
+    mixed = (f" (this run used {len(windows)} window sizes, " + ", ".join(f"{k:,} x{v}" for k, v in windows.items())
+             + "; each call is measured against its own)") if len(windows) > 1 else ""
     return (f"context pressure: the largest call used {cost['peak_tokens']:,} of {cost['num_ctx']:,} tokens "
-            f"({100 * cost['peak_tokens'] / cost['num_ctx']:.1f}% of the window, above {pct(CONTEXT_PRESSURE_LIMIT, 0)}%). A reply or "
-            f"thinking trace that outgrows the window is cut off or shifted without an error: raise --num-ctx, or "
-            f"let the auto-sizer reserve its think-aware headroom (4096 tokens with thinking off, 8192 on).")
+            f"({100 * cost['peak_tokens'] / cost['num_ctx']:.1f}% of its window, above {pct(CONTEXT_PRESSURE_LIMIT, 0)}%){mixed}. "
+            f"A reply or thinking trace that outgrows the window is cut off or shifted without an error: raise "
+            f"--num-ctx, or let the auto-sizer reserve its think-aware headroom (4096 tokens with thinking off, 8192 on).")
 
 
 # ---------------------------------------------------------------------------
@@ -463,13 +479,15 @@ def render_markdown(rr: RunReport) -> str:
     if c:
         out += ["## Cost", "",
                 "| calls | errors | tokens in (sum / mean) | tokens out (sum / mean) | median s | max s | sum s | wall s | "
-                "num_ctx | peak in+out | think | done_reason |",
+                "window(s) | peak in+out | think | done_reason |",
                 "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
                 f"| {c['calls']} | {c['errors']} | {c['tokens_in']:,} / {c['tokens_in_mean'] or '-'} | "
                 f"{c['tokens_out']:,} / {c['tokens_out_mean'] or '-'} | {c['latency_median_s'] or '-'} | "
                 f"{c['latency_max_s'] or '-'} | {c['latency_sum_s'] or '-'} | {c['wall_s'] or '-'} | "
-                f"{c['num_ctx'] or '-'} | {c['peak_tokens'] or '-'}"
-                + (f" ({pct(c['context_pressure'], 0)}% of the window)" if c["context_pressure"] else "") + " | "
+                + (", ".join(f"{k} x{v}" for k, v in c["windows"].items()) if len(c.get("windows") or {}) > 1
+                   else f"{c['num_ctx'] or '-'}")
+                + f" | {c['peak_tokens'] or '-'}"
+                + (f" ({pct(c['context_pressure'], 0)}% of its window)" if c["context_pressure"] else "") + " | "
                 + (", ".join(f"{k} x{v}" for k, v in c["think"].items()) or "-") + " | "
                 + (", ".join(f"{k} x{v}" for k, v in c["done_reason"].items()) or "-") + " |", ""]
         if c["params"]:

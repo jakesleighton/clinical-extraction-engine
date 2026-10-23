@@ -6,6 +6,7 @@ data/*
 !data/tcga_prad/
 data/tcga_prad/*
 !data/tcga_prad/working_set.txt
+!data/tcga_prad/sweep_ids.txt
 !data/tcga_prad/case_groups.csv
 runs/*
 !runs/.gitkeep
